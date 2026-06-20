@@ -1,0 +1,5 @@
+.matplotlib_cache/
+~/
+.ipynb_checkpoints/
+.vscode/
+.broadcast.py.swp
