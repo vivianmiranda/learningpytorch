@@ -1,28 +1,34 @@
 ---
 name: emulator-floor-is-data-coverage
-description: "The cosmic-shear emulator's frac>0.2 floor (~0.20 after the omega_b h^2<0.035 physical cut) is a MODEL-CAPACITY / representation limit, proven decisively by the network underfitting its OWN training set: train frac>0.2 (0.17) == val frac>0.2 (0.20). That rules out data, regularization, and loss-shaping (all tried, all neutral). Earlier framings in this note (evaluation artifact, T/2 validation, omega_b h^2 coverage) were intermediate steps, now SUPERSEDED. The transferable diagnostic discipline that nailed it: threshold ladder (tail vs shoulder), diagnose in the metric's own decorrelated coordinates (not a marginal per-element lens), and the decisive train-vs-val test."
+description: "The cosmic-shear emulator's frac>0.2 floor is DATA-LIMITED (training-set size), settled by the data-scaling / learning curve: the baseline used only ~1/10 of the omega_b h^2<0.035 pool, and growing N_train drops val frac>0.2 from 0.219 (10k) to 0.100 (46k, the GOAL) toward the full 82k pool. Fix: train on more of the available data. A mid-session 'it is capacity' call (from train==val underfitting) was WRONG and was refuted by this curve -- train==val rules out overfitting but does NOT prove capacity; only the learning curve (metric vs N_train) settles capacity-vs-data. Loss-shaping / LR / batch / per-element weight were all correctly exhausted as the lever; the real lever was always more data."
 metadata:
   node_type: memory
   type: project
   originSessionId: a703cd31-5515-4fe4-8d50-bdf7c9f08651
 ---
 
-**FINAL CONCLUSION (2026-06-24): the floor is MODEL CAPACITY, not
-data/coverage.** With the physical cut omega_b h^2 < 0.035 on both train and
-val, frac>0.2 plateaus ~0.20 (the cut removed the catastrophic >10 tail,
-0.36 -> 0.20; the residual is a shoulder). It is a representation limit, proven
-by the network underfitting its OWN training set:
+**FINAL CONCLUSION (2026-06-24, CORRECTED): the floor is DATA (training-set
+size), not capacity.** A mid-session read called it capacity from train == val
+underfitting; the data-scaling experiment REFUTED that. Training a fresh model at
+increasing N_train (drawn from the omega_b h^2<0.035 pool; the baseline used only
+~1/10 of it) drops val frac>0.2 decisively:
 
-    train  frac>0.2 = 0.17   (median 0.061)
-    val    frac>0.2 = 0.20   (median 0.057)
+    N_train 10k -> val frac>0.2 0.219
+    N_train 46k -> val frac>0.2 0.100   (the goal)
+    pool = 82k (full physical cs_16; 82k point pending)
 
-These are EQUAL. The model cannot beat ~0.17-0.20 even on data it trained on ->
-underfitting, a statement about the model not the data split. That rules out, by
-construction: more data (cannot help a model that already fails the data it
-has), regularization (fights overfitting, the opposite problem), and
-loss-shaping (cannot represent a function the model cannot represent). The one
-confirming experiment: enlarge the net (int_dim_res 128->256 or n_blocks 4->8),
-retrain, watch TRAIN frac>0.2 -- if it falls, capacity is confirmed and solved.
+More data helps -- a lot -- and the 0.10 goal is already reached at 46k. So the
+floor was simply the 10% training subset being too small; the fix is to train on
+more of the available pool. The note's original name (data coverage) was right.
+
+Why the capacity call was wrong (the lesson worth keeping): train == val rules
+out OVERFITTING (low variance) but does NOT prove capacity. A regularized model
+that fits a small training set only partway looks identical -- train == val, both
+high -- whether the limit is capacity or data sparsity. The capacity-vs-data
+question is settled only by the LEARNING CURVE (metric vs N_train), which here
+falls steeply -> data-limited. The train-vs-val gap diagnoses overfitting; the
+learning curve diagnoses the floor. Mistake made: the gap was read as proving
+capacity, asserted as "earned," and written down before running the curve.
 
 **The diagnostic ladder that earned this (the transferable part):**
 - Threshold ladder (0.2, 0.5, 1, 10, 100): the failures are a SHOULDER piled just
@@ -48,10 +54,12 @@ retrain, watch TRAIN frac>0.2 -- if it falls, capacity is confirmed and solved.
   space), not a convenient marginal one.
 - No conditioning bug: chi2 == ||pred-target||^2 to ~0.1% (max rel 1.6e-3), so
   the whitening basis IS the chi2 basis.
-- DECISIVE: train frac>0.2 == val frac>0.2 -> capacity. Tempering confound to
-  avoid: T_val = T_train/2, so val has smaller per-element spread BY CONSTRUCTION;
-  compare at the same metric (frac>0.2), never per-element rms (where val<train is
-  just the temperature).
+- DECISIVE (corrected): the LEARNING CURVE (frac>0.2 vs N_train), NOT the
+  train-vs-val gap. train == val only rules out overfitting; the curve here falls
+  0.22 -> 0.10 from 10k -> 46k cosmologies = DATA-limited (more data helps). The
+  earlier "train == val -> capacity" read was WRONG. (Tempering confound for the
+  per-element view: T_val = T_train/2, so val < train per element is just the
+  temperature; compare at the metric, not per-element rms.)
 
 Everything below is the earlier investigation history (intermediate, now
 superseded by the FINAL CONCLUSION above). The line "NOT a loss-shaping or

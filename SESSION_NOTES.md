@@ -14,23 +14,28 @@ full 3x2pt chi2 via cosmolike's masked inverse covariance.
 - cosmolike (`ci`) runs only on the workstation; only the user can run cosmolike
   cells — review such code statically.
 
-## Where the emulator stands — FLOOR IS MODEL CAPACITY (settled 2026-06-24)
+## Where the emulator stands — FLOOR IS DATA-LIMITED (settled 2026-06-24)
 
-With the physical cut `omega_b h^2 < 0.035` on both sources, `frac>0.2` plateaus
-**~0.20** (the cut removed the catastrophic `>10` tail; `0.36 → 0.20`). The
-residual ~0.20 is a **model-capacity / representation limit**, proven decisively:
+With the physical cut `omega_b h^2 < 0.035`, the baseline `frac>0.2 ≈ 0.20` used
+only ~1/10 of the pool. The **data-scaling / learning curve** settles it — growing
+`N_train` drops val `frac>0.2` steeply:
 
-> `train frac>0.2 = 0.17` (median 0.061) **==** `val frac>0.2 = 0.20` (median 0.057)
+> `N_train 10k → 0.219`,  `46k → 0.100` (the goal),  pool `= 82k` (82k pending)
 
-The network can't beat ~0.17–0.20 **even on its own training data** → underfitting,
-a fact about the model not the data split. This rules out, by construction: more
-data (can't help a model that already fails the data it has), regularization
-(fights overfitting — the opposite), and loss-shaping (can't reweight past a
-function the model can't represent). **Confirming experiment:** enlarge the net
-(`int_dim_res` 128→256 or `n_blocks` 4→8), retrain, watch **train** `frac>0.2` —
-if it falls, capacity confirmed and solved. Full write-up:
-[[emulator-floor-is-data-coverage]] (renamed in spirit to "model capacity";
-earlier data-coverage/T-2/omega_b h^2 framings are superseded).
+**More data helps, and the 0.10 goal is already hit at 46k.** The floor was simply
+the 10% training subset being too small; the fix is to **train on more of the
+available pool.**
+
+> CORRECTION: a mid-session read called this a **model-capacity** limit (from
+> `train frac>0.2 = 0.17 ≈ val = 0.20`, i.e. underfitting its own training set).
+> **That was wrong** — the scaling curve refutes it. `train ≈ val` rules out
+> *overfitting* but does **not** prove capacity; a regularized model under sparse
+> data looks the same. Only the **learning curve** (metric vs `N_train`) settles
+> capacity-vs-data, and here it says **data**. Lesson: run the learning curve;
+> the train-vs-val gap diagnoses overfitting, not the floor.
+
+Full write-up: [[emulator-floor-is-data-coverage]]. Loss-shaping / LR / batch /
+per-element weight were all correctly exhausted — the lever was always more data.
 
 **The diagnostic ladder (transferable, also added to the skill):**
 - Threshold ladder (0.2/0.5/1/10/100): failures are a **shoulder** piled just
@@ -47,9 +52,11 @@ earlier data-coverage/T-2/omega_b h^2 framings are superseded).
   → correlated common modes the chi2 barely charges for. Diagnose in the metric's
   **own decorrelated coordinates**, not a marginal one. (Verified `chi2 ==
   ||pred-target||²` to 0.1% → whitening IS the chi2 basis, no conditioning bug.)
-- **Decisive:** train ≈ val at the metric → capacity. Tempering confound: T_val =
-  T_train/2, so val<train per-element is just the temperature — compare at the
-  same metric.
+- **Decisive (corrected):** the **learning curve** (`frac>0.2` vs `N_train`), not
+  the train-vs-val gap. `train ≈ val` only rules out overfitting; the curve falls
+  `0.22 → 0.10` from 10k → 46k = **data-limited**. (Tempering confound for the
+  per-element view: T_val = T_train/2, so val<train per element is just the
+  temperature — compare at the metric.)
 
 ## Decisions in place
 
