@@ -100,28 +100,78 @@ Full step-by-step derivation: `analytic_scaling.pdf` / `.tex` (repo root).
   A/B-swappable. `chi2` falls back to a per-batch `self._R` stash that `loss`
   sets, so the inherited trim/focal reduction reuses it.
 
-## Next step (the decisive open task): wire the rescaling into training
+## Rescaling: WIRED, VERIFIED, RUNNING (as of 2026-06-24)
 
-Not yet done — the run still uses plain `CosmolikeChi2`; `RescaledChi2` is used
-only in analysis cells. Plan:
-- Add `cosmo_mid` / `names` / `include_amp=True` params to `run_emulator` →
-  `build_loaders` → `_build_loaders_one`.
-- `_build_loaders_one`: when `cosmo_mid` is given, compute
-  `R_used = analytic_shape_ratio(C[used_rows], cosmo_mid, names, chi2fn,
-  include_amp=True)`, make it resident on device, encode the resident targets
-  with it (`chi2fn.encode(dv_block, R_block)`), and expose `load_R(rows)` parallel
-  to `load_C`. Count R in the resident bytes.
-- `training_loop_batched`: per batch, if `load_R` present, pass R:
-  `lossfn.loss(pred, dvc[b], R_chunk[b], mode, trim=rob, focus=focus,
-  focus_scale=kappa)`.
-- `eval_val`: per chunk, pass R: `lossfn.chi2(pred, dvc, R_chunk)`.
-- Branch on whether R is present (CosmolikeChi2 vs RescaledChi2 loss/chi2
-  signatures differ). Gate everything on `cosmo_mid is None` so the base
-  (no-rescale) path stays A/B-runnable.
-- `cosmo_mid` = the training-cloud mean (`train_set["C_mean"]`-style center;
-  R = 1 there).
-- Then the decisive test: re-run the cut-scan / `frac>0.2` on the rescaled target.
-  The spread ratio is only a cheap proxy.
+The rescaling is now integrated into the training run and verified; the only open
+task is reading the `frac>0.2` result. (All code delivered as paste-ready cells —
+the notebook is read-only, never edited in place.)
+
+**Approach — loss-side `RescaledChi2`, plain `ResMLP`, R computed on the fly.** R
+is a deterministic function of the cosmological params, so it is never stored (the
+rejected `load_R` plan stored an `(N_rows, n_keep)` array, ~doubling resident-target
+memory — the regime-1 binding constraint at the real million-dv scale). The loss is
+handed the cosmology it already has and computes R itself ("the loss knows the
+cosmology and the dv"). A *model-side* variant (`RescaledResMLP`, rescaling inside
+`forward`) was explored — it avoids touching the loop entirely and is provably
+identical (value + gradient, verified `/tmp/test_model_wrapper.py`) — but rejected
+to keep the plain `ResMLP` and the clean "rescale in the loss" picture; the user
+accepted the one-argument loop change instead.
+
+**Why the loop must change at all (the fundamental point):** the loss is handed
+`pred` and `target`, both data vectors (xi) — never the cosmology. R needs the
+params (As, ns, H0, Ωm), which are not recoverable from a dv. So the loss must be
+*given* the params, and only the loop holds them per-minibatch (`Cc[b]`). That one
+argument is the whole change.
+
+**R is needed in two spots, same source:** building the target (`encode(dv*R)`,
+once at pre-encode) and undoing it in the chi2 (`r = unwhiten(pred-target)/R`,
+every step). Both derive R from `param_geometry.decode(whitened_params)`, so they
+use bit-identical R. `_analytic_R` made dual numpy/torch (one formula; numpy path
+bit-identical to old; torch on-device). Verified: numpy==torch ~1e-15 (float64),
+float32 ~1e-6, R=1 at the reference exactly (`/tmp/test_analytic_R.py`).
+
+**`RescaledChi2`** (subclass of `CosmolikeChi2`): `configure_rescaling(pgeom,
+cosmo_mid, names, include_amp=True, u_star=0.5)` attaches the config (asserts
+`build_shear_angle_map` ran first); `_R(params_whitened)` decodes → physical →
+analytic R, caching theta/zeff device tensors; `encode`/`decode`/`chi2`/`loss`
+take the whitened params; `loss` stashes them so the inherited trim/focal
+reduction (`super().loss` → `self.chi2`) reuses them. `isinstance` keeps `super()`
+dispatch landing on `RescaledChi2.chi2`.
+
+**Wiring — branches only, gated on `isinstance(.., RescaledChi2)`, base path
+untouched and A/B-runnable.** `_build_loaders_one` pre-encode (all 3 regimes)
+passes the whitened param slice to `chi2fn.encode`; `training_loop_batched` batch
+loop passes `Cc[b]`; `eval_val` passes the chunk's `Cc`; `eval_source_chi2`
+(scoring) passes `X`. `run_emulator` / `build_loaders` / `make_model` unchanged
+(config rides on chi2fn). Base signatures have no params slot, so passing
+unconditionally crashes the no-rescale run — hence the branch.
+
+**Driver = the rescaled `%%time` run cell.** `pgeom = ParamGeometry.from_covmat`;
+`chi2fn = RescaledChi2.from_cosmolike(device, dvt_off, probe="xi")`;
+`build_shear_angle_map(chi2fn)`; `cosmo_mid = train_set["C"][train_set["idx"]
+].mean(0)`; `chi2fn.configure_rescaling(pgeom, cosmo_mid, list(pgeom.names),
+include_amp=True)`; sanity cell; `run_emulator(...)` with `model_opts` = plain
+`ResMLP` and `chi2fn` = the configured `RescaledChi2`.
+
+**Sanity verified (the pre-flight cell passes):** `max|R(mid)-1| = 0.0` exactly;
+the xi layout is confirmed — `theta_kept` rises 2.8'→33.78' (theta inner) while
+`(zsrc_i,zsrc_j)` stays `(0.33,0.33)` across the first pair (pairs outer), matching
+`build_shear_angle_map`'s assumption, so R hits the right elements. Smallest thetas
+masked by the scale cuts (first kept = 2.8').
+
+**Bugs fixed during the review pass (all now in the notebook):** cell-286
+Basic-tests load computed means from `train_set` before it existed (→ read locals
+`dv0`/`C0`/`tidx`); `g` (RNG generator) clobbered by `g = gplot.getSubplotPlotter`
+in the triangle cells (→ plotter renamed `gp`); `eval_val` rescaled branch used
+`Cc[b]` (`b` undefined there) instead of the whole-chunk `Cc`; `analytic_shape_ratio`
+and `rescale_xi` took the whole `geom` but used only a few attrs (→ take
+`theta_kept`/`zsrc_i`/`zsrc_j` and `z_src` explicitly); `eval_source_chi2` needed
+the `isinstance` branch; `configure_rescaling` gained an early `hasattr` guard.
+
+**The one open task:** read `frac>0.2` on the rescaled target (baseline ~0.36).
+The spread ratio (0.46) was only a proxy. Expectation: helps the broadband bulk,
+cannot move the `omega_b h^2` tail (zero-baryon transfer, see
+[[emulator-floor-is-data-coverage]]).
 
 ## RAM-efficient data loading
 
@@ -142,14 +192,13 @@ only in analysis cells. Plan:
   references the array — no duplication; `del` the loose names to keep only the
   dict).
 
-## Open bug
+## Open bug (resolved)
 
-The "20 random validation" plot cell (builds `chi2fn_v2 = RescaledChi2`,
-`xi_list = [dv_to_xi(...) for r in sel]`, calls `plot_xi(1, xi_list, ...)` then
-`plot_xi(1, xi_resc, ...)`) references `xi_resc` but never builds it — the
-`xi_resc = rescale_xi(xi_list, cosmo, cosmo_mid, names, chi2fn_v2)` line was
-dropped in a restructure. Add it back (with the y-axis sync that forces both
-panels onto a shared per-panel scale via the union of their ylims).
+The "20 random validation" plot cell once dropped the
+`xi_resc = rescale_xi(...)` line. In the current notebook it is present again
+(the `# same 20, analytically rescaled` block builds `xi_resc` with
+`include_amp=True`, followed by the per-panel y-axis sync over the union of both
+panels' ylims). No action needed.
 
 ## Conventions (house style for code in this notebook)
 

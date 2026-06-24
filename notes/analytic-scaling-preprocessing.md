@@ -1,6 +1,6 @@
 ---
 name: analytic-scaling-preprocessing
-description: "Physics-informed RATIO preprocessing for the cosmic-shear emulator: multiply each data vector by R = xi_analytic(mid)/xi_analytic(cosmo) from a crude analytic model (E&H zero-baryon, linear, Limber, single-source-plane delta-n(z), H=H0), emulate the flatter residual, divide R back out before the chi2. The ratio cancels cosmology-common nonlinearity so a linear no-halofit model still works. Validated by spread ratio (As-only 0.79, +shape 0.515, +N amplitude 0.456; N=(Om h^2)^ns/h also lifts improved-fraction 0.89->0.98). include_amp=True is the standard. Helps the broadband bulk, NOT the omega_b h^2 floor. Full derivation in analytic_scaling.pdf; NOT yet wired into the training pipeline."
+description: "Physics-informed RATIO preprocessing for the cosmic-shear emulator: multiply each data vector by R = xi_analytic(mid)/xi_analytic(cosmo) from a crude analytic model (E&H zero-baryon, linear, Limber, single-source-plane delta-n(z), H=H0), emulate the flatter residual, divide R back out before the chi2. The ratio cancels cosmology-common nonlinearity so a linear no-halofit model still works. Validated by spread ratio (As-only 0.79, +shape 0.515, +N amplitude 0.456; N=(Om h^2)^ns/h also lifts improved-fraction 0.89->0.98). include_amp=True is the standard. Helps the broadband bulk, NOT the omega_b h^2 floor. Full derivation in analytic_scaling.pdf. WIRED into training (2026-06-24) as a loss-side RescaledChi2 that computes R on the fly from the params it is handed; verified and running, awaiting the frac>0.2 result."
 metadata: 
   node_type: memory
   type: project
@@ -79,22 +79,45 @@ chi2 stays on the physical dv); base class is untouched, so the two are
 A/B-swappable. Derivation written up in `analytic_scaling.pdf` / `.tex` at the
 repo root.
 
-**Pending (next step, the session's last open task):** NOT yet wired into
-training -- the %%time run still passes the plain CosmolikeChi2; RescaledChi2 is
-used only in the analysis/plot cells. The integration (designed, not written):
-add `cosmo_mid`/`names`/`include_amp` to run_emulator -> build_loaders ->
-_build_loaders_one, which computes `R_used = analytic_shape_ratio(C[used_rows],
-cosmo_mid, names, chi2fn, include_amp=True)`, encodes the resident targets with
-it, and exposes a `load_R(rows)` (parallel to load_C); training_loop_batched and
-eval_val branch on load_R to pass the batch's R to loss/chi2 (the
-CosmolikeChi2-vs-RescaledChi2 loss/chi2 signatures differ, so branch). Gate on
-cosmo_mid=None so the base path stays A/B-runnable. Then the decisive test is
-frac>0.2 on the rescaled target via the cut-scan -- the spread ratio is only a
-cheap proxy. (A separate restructure bug to fix: the "20 random val" plot cell
-references `xi_resc` but never builds it -- the `xi_resc = rescale_xi(...)` line
-was dropped.)
+**Status: WIRED, VERIFIED, RUNNING (2026-06-24).** The %%time run now passes the
+configured RescaledChi2; the only open task is reading frac>0.2. The pre-flight
+sanity cell passes: max|R(mid)-1| = 0.0 exactly, and the xi layout checks out
+(theta_kept rises 2.8'->33.78' = theta inner; (zsrc_i,zsrc_j) stays (0.33,0.33)
+across the first pair = pairs outer), matching build_shear_angle_map's assumption.
+Driver order that works: from_cosmolike -> build_shear_angle_map(chi2fn) ->
+configure_rescaling(pgeom, cosmo_mid, names, include_amp=True) -> sanity ->
+run_emulator (model_opts = plain ResMLP, chi2fn = the configured RescaledChi2). A
+model-side variant (RescaledResMLP, rescaling in forward()) was explored and proven
+identical in value+gradient (/tmp/test_model_wrapper.py) but rejected to keep the
+plain ResMLP; the loss-side path with the loop branch was chosen instead.
+
+**Compute R on the fly, do NOT store it.** R is a deterministic function of the
+cosmological params, so an `(N_rows, n_keep)` stored R (the rejected `load_R`
+plan) is pure waste and ~doubles the resident-target memory at scale. The loss is
+handed the cosmology it already has and computes R itself. R is needed (1) to
+build the target the net learns (`encode(dv*R)`, once at pre-encode) and (2) to
+undo in the chi2 (`unwhiten(pred-target)/R`, every step); BOTH derive R from
+`param_geometry.decode(whitened_params)`, so they use bit-identical R and the
+giant array never exists.
+
+`_analytic_R` made dual numpy/torch (one formula; library by input type; only
+`log` + coercion differ). numpy path bit-identical to the old; torch path runs
+on-device from the resident params. Verified numpy==torch to ~1e-15 (float64),
+float32 within ~1e-6, R=1 at the reference (throwaway-venv test). `RescaledChi2`
+holds the rescale config (param_geometry, cosmo_mid, names, include_amp, u_star),
+caches the kept-element geometry tensors, and its `encode`/`decode`/`chi2`/`loss`
+take the whitened params instead of a precomputed R (`loss` stashes them for the
+inherited trim/focal reduction). Plumbing is branches only, gated on
+`isinstance(chi2fn, RescaledChi2)`: `_build_loaders_one` pre-encode, the
+`training_loop_batched` batch loop, and `eval_val` each pass the whitened params
+they already hold; run_emulator/build_loaders unchanged (config rides on chi2fn),
+base path A/B-runnable. Then the decisive test is frac>0.2 on the rescaled target
+via the cut-scan -- the spread ratio is only a cheap proxy.
+
+(The earlier "20 random val" `xi_resc` restructure bug is already fixed in the
+current notebook -- the `xi_resc = rescale_xi(...)` line is present again.)
 
 **Why:** records a validated, physically-motivated lever (and its ceiling) so we
-do not re-derive it or re-litigate ratio-vs-difference; and flags the open
-integration so the next session goes straight to wiring + the frac>0.2 test
-rather than re-running the spread/visual checks.
+do not re-derive it or re-litigate ratio-vs-difference; now that the integration
+is done and verified, the next session goes straight to reading the frac>0.2
+result rather than re-running the spread/visual checks or re-wiring.
