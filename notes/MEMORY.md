@@ -1,0 +1,16 @@
+# Memory index
+
+- [Weight decay only on weight matrices](weight-decay-only-on-weight-matrices.md) — don't decay learned-activation/norm-gain/bias params; wd=0 or ndim>=2 split.
+- [Hanging indent, not paren alignment](hanging-indent-not-paren-alignment.md) — wrap multiline calls/signatures with a 2-space hanging indent, never align under the opening paren.
+- [Locate notebook edits by context](locate-notebook-edits-by-context.md) — point to notebook spots by function/marker/quoted line, never cell or line numbers (user can't see those).
+- [Dev machine: Mac M2, 32 GB, MPS](dev-machine-mac-m2-32gb.md) — test on M2/MPS (no device float64, unified 32 GB pool), train on NVIDIA; code branches on device.type.
+- [Docstrings: formal Arguments block](docstrings-formal-arguments-block.md) — every docstring lists ALL params in a formal Arguments: block (+ Returns), never prose covering only some.
+- [Plots: no red+green](plots-no-red-green.md) — colorblind accessibility; explicit colorblind-safe palette per line, never the default cycle.
+- [Emulator pipeline and goal](emulator-pipeline-and-goal.md) — pytorch1.ipynb cosmic-shear emulator; goal 90% under delta-chi2<0.2; select by frac>0.2; component map.
+- [Construction via spec dicts](construction-via-spec-dicts.md) — model/opt/scheduler built from {cls, **kwargs} dicts + make_X helpers; injected args stay out.
+- [Probe-generalization bugs](probe-generalization-bugs.md) — always hunt xi-only assumptions that break ggl/wtheta; block-local vs global index, full-3x2pt dataset/cosmolike arrays, probe-name reuse.
+- [Emulator floor is data coverage](emulator-floor-is-data-coverage.md) — frac>0.2 ~0.36 floor was grading val at the sparse T-edges; loss tricks (trim/focal) can't fit edge points; fix is validating on a separate T/2 file (well-covered interior = inference region), then two-source loaders.
+- [Shared budget across sequential calls](shared-budget-across-sequential-calls.md) — splitting one allocator into N sequential calls vs a shared finite budget (VRAM/RAM) needs the running remainder threaded; by-value budget to sequential allocators = smell; finish resource accounting both directions.
+- [No global variables in functions](no-global-variables-in-functions.md) — functions take params, read no data global; flag any unavoidable global with ⚠️ WARNING (never silent); audit free names with symtable. Caught run_emulator→device and stale param_geom.
+- [Analytic-scaling preprocessing](analytic-scaling-preprocessing.md) — ratio preprocess the dv by R=xi_analytic(mid)/xi_analytic(cosmo) (E&H zero-baryon, linear, Limber, single-plane, H=H0); ratio cancels common nonlinearity; As+shape+N removes ~79% broadband variance (spread 0.456, improved 0.98) but not the omega_b h^2 floor; full derivation in analytic_scaling.pdf; RescaledChi2 written, pipeline wiring still pending.
+- [Data staging: RAM + source dict](data-staging-ram-and-source-dict.md) — memmap the full dv dump; stage_source materializes the used subset to RAM if it fits 70% psutil.available, reindexing local (idx->arange) so the pipeline is unchanged; source dict carries C/dv/idx + C_mean/dv_mean; references not deep copies.
