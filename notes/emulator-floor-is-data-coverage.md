@@ -1,14 +1,68 @@
 ---
 name: emulator-floor-is-data-coverage
-description: "The cosmic-shear emulator's frac>0.2 ~0.36 floor was an EVALUATION artifact: the old val (a subset of the T-sampled training file) scored the sparse EDGES of the T distribution, where the emulator is inaccurate and loss tricks can't help. Fix is validating on a separate T_train/2 file that stays in the well-covered interior (where inference lives), not adding training coverage."
+description: "The cosmic-shear emulator's frac>0.2 floor (~0.20 after the omega_b h^2<0.035 physical cut) is a MODEL-CAPACITY / representation limit, proven decisively by the network underfitting its OWN training set: train frac>0.2 (0.17) == val frac>0.2 (0.20). That rules out data, regularization, and loss-shaping (all tried, all neutral). Earlier framings in this note (evaluation artifact, T/2 validation, omega_b h^2 coverage) were intermediate steps, now SUPERSEDED. The transferable diagnostic discipline that nailed it: threshold ladder (tail vs shoulder), diagnose in the metric's own decorrelated coordinates (not a marginal per-element lens), and the decisive train-vs-val test."
 metadata:
   node_type: memory
   type: project
   originSessionId: a703cd31-5515-4fe4-8d50-bdf7c9f08651
 ---
 
+**FINAL CONCLUSION (2026-06-24): the floor is MODEL CAPACITY, not
+data/coverage.** With the physical cut omega_b h^2 < 0.035 on both train and
+val, frac>0.2 plateaus ~0.20 (the cut removed the catastrophic >10 tail,
+0.36 -> 0.20; the residual is a shoulder). It is a representation limit, proven
+by the network underfitting its OWN training set:
+
+    train  frac>0.2 = 0.17   (median 0.061)
+    val    frac>0.2 = 0.20   (median 0.057)
+
+These are EQUAL. The model cannot beat ~0.17-0.20 even on data it trained on ->
+underfitting, a statement about the model not the data split. That rules out, by
+construction: more data (cannot help a model that already fails the data it
+has), regularization (fights overfitting, the opposite problem), and
+loss-shaping (cannot represent a function the model cannot represent). The one
+confirming experiment: enlarge the net (int_dim_res 128->256 or n_blocks 4->8),
+retrain, watch TRAIN frac>0.2 -- if it falls, capacity is confirmed and solved.
+
+**The diagnostic ladder that earned this (the transferable part):**
+- Threshold ladder (0.2, 0.5, 1, 10, 100): the failures are a SHOULDER piled just
+  above 0.2 (~half of the >0.2 are in 0.2-0.5), not a heavy tail. A log-normal fit
+  to the bulk (median 0.05, sigma_log~1.65) reproduces the 0.5 and 1 fractions ->
+  the 0.2-1 shoulder is the upper tail of ONE broad distribution, not a separable
+  population. You cannot narrow a spread by reweighting -> loss-shaping is dead on
+  arrival.
+- Optimization ruled out: halving the LR tightened the late-epoch bounce but did
+  not move the floor (bounce = step-size on near-threshold points; floor is
+  underneath). Batch size is also a dead lever -- under the sqrt-lr coupling all
+  batch sizes converge to the same frac (the coupling holds the gradient-noise
+  scale fixed), so bigger batch cannot shrink the floor; 512 only broke because
+  the coupled lr overshot.
+- Loss-shaping ruled out empirically: per-cosmology focal + kappa sweep, a
+  threshold-centered bump, and a per-ELEMENT focal (ElementWeightedChi2, beta=4)
+  were all neutral.
+- The MARGINAL per-element lens MISLED us: it flagged the highest source bin
+  (z~1.34) at small theta. But the network leaves ~1.5 sigma MARGINAL residuals
+  there even on TRAINING and the loss tolerates it -> those are correlated
+  common-mode directions the chi2 barely charges for. Diagnose in the METRIC's
+  own coordinates (the chi2 is a sum of squares in the whitened/decorrelated
+  space), not a convenient marginal one.
+- No conditioning bug: chi2 == ||pred-target||^2 to ~0.1% (max rel 1.6e-3), so
+  the whitening basis IS the chi2 basis.
+- DECISIVE: train frac>0.2 == val frac>0.2 -> capacity. Tempering confound to
+  avoid: T_val = T_train/2, so val has smaller per-element spread BY CONSTRUCTION;
+  compare at the same metric (frac>0.2), never per-element rms (where val<train is
+  just the temperature).
+
+Everything below is the earlier investigation history (intermediate, now
+superseded by the FINAL CONCLUSION above). The line "NOT a loss-shaping or
+model-capacity problem" was an early read; loss-shaping is correctly exhausted,
+but the floor IS capacity.
+
+---
+
 The emulator ([[emulator-pipeline-and-goal]]) hit frac>0.2 ~= 0.36 (goal < 0.10).
-A long investigation showed this is NOT a loss-shaping or model-capacity problem.
+An early investigation framed this as NOT a loss-shaping or model-capacity problem
+(the capacity half is corrected above).
 
 **Loss-shaping is exhausted (all tried, all failed):**
 - Trim annealing (5% -> 0, several schedules): never beat the const-5% baseline.

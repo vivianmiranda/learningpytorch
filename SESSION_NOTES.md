@@ -14,19 +14,42 @@ full 3x2pt chi2 via cosmolike's masked inverse covariance.
 - cosmolike (`ci`) runs only on the workstation; only the user can run cosmolike
   cells — review such code statically.
 
-## Where the emulator stands
+## Where the emulator stands — FLOOR IS MODEL CAPACITY (settled 2026-06-24)
 
-`frac>0.2` plateaus around 0.36–0.43. Investigation concluded:
-- Loss-shaping (trim annealing, focal reweighting) is exhausted — neither beat
-  the const-5%-trim baseline; the floor is not a loss problem.
-- The hard, high-chi2 cosmologies cluster at **high physical baryon density**
-  `omega_b h^2 = Omega_b (H0/100)^2`, with a sharp cliff at `omega_b h^2 ~ 0.04`
-  (cut-scan: below it the bulk clears 0.2; above it dchi2 ~ 1e2–1e4). 0.04 is ~2x
-  Planck (0.0224), so the worst region is unphysical.
-- But the cliff is only ~8% of points, so it barely moves `frac>0.2` (it
-  dominates the *mean*, not the count). Even restricting to `omega_b h^2 < 0.025`
-  leaves `frac>0.2 ~ 0.29` — the floor is broad in-region accuracy, not just the
-  unphysical tail.
+With the physical cut `omega_b h^2 < 0.035` on both sources, `frac>0.2` plateaus
+**~0.20** (the cut removed the catastrophic `>10` tail; `0.36 → 0.20`). The
+residual ~0.20 is a **model-capacity / representation limit**, proven decisively:
+
+> `train frac>0.2 = 0.17` (median 0.061) **==** `val frac>0.2 = 0.20` (median 0.057)
+
+The network can't beat ~0.17–0.20 **even on its own training data** → underfitting,
+a fact about the model not the data split. This rules out, by construction: more
+data (can't help a model that already fails the data it has), regularization
+(fights overfitting — the opposite), and loss-shaping (can't reweight past a
+function the model can't represent). **Confirming experiment:** enlarge the net
+(`int_dim_res` 128→256 or `n_blocks` 4→8), retrain, watch **train** `frac>0.2` —
+if it falls, capacity confirmed and solved. Full write-up:
+[[emulator-floor-is-data-coverage]] (renamed in spirit to "model capacity";
+earlier data-coverage/T-2/omega_b h^2 framings are superseded).
+
+**The diagnostic ladder (transferable, also added to the skill):**
+- Threshold ladder (0.2/0.5/1/10/100): failures are a **shoulder** piled just
+  above 0.2 (~half in 0.2–0.5), the upper tail of one broad log-normal
+  (median 0.05, `σ_log≈1.65`). You can't narrow a spread by reweighting → loss
+  shaping is dead on arrival.
+- Optimization ruled out: halving the LR tightened the late bounce, floor unmoved.
+  Batch size dead too (sqrt-lr coupling makes all bs converge; 512 only broke
+  because the coupled lr overshot — AdamW needs little/no lr scaling with bs).
+- Loss-shaping ruled out empirically: focal+kappa, threshold bump, and a
+  per-element focal (`ElementWeightedChi2`) all neutral.
+- The **marginal per-element lens misled us** (flagged high-z small-θ); the net
+  leaves ~1.5σ marginal residuals there even on train and the loss tolerates them
+  → correlated common modes the chi2 barely charges for. Diagnose in the metric's
+  **own decorrelated coordinates**, not a marginal one. (Verified `chi2 ==
+  ||pred-target||²` to 0.1% → whitening IS the chi2 basis, no conditioning bug.)
+- **Decisive:** train ≈ val at the metric → capacity. Tempering confound: T_val =
+  T_train/2, so val<train per-element is just the temperature — compare at the
+  same metric.
 
 ## Decisions in place
 
