@@ -22,9 +22,20 @@ only ~1/10 of the pool. The **data-scaling / learning curve** settles it — gro
 
 > `N_train 10k → 0.219`,  `46k → 0.100` (the goal),  pool `= 82k` (82k pending)
 
-**More data helps, and the 0.10 goal is already hit at 46k.** The floor was simply
-the 10% training subset being too small; the fix is to **train on more of the
-available pool.**
+**More data helps, and the 0.10 goal is already hit at 46k.** On the TOY problem
+the floor was simply the 10% training subset being too small.
+
+But "add data" is the toy answer, not the project goal. The real target is
+**T=512 + w0wa + TATT** (~17+ params, hot prior, expensive cosmolike vectors),
+where `N_train` is the **binding constraint**. So the objective is **sample
+efficiency** — the *position* of this learning curve, the smallest `N_train` to
+reach target — not the floor. Every lever (rescaling, architecture, features) is
+judged by whether it **shifts the curve left** (same accuracy, fewer samples), not
+by the floor at one `N_train`. Tested this way, the **target rescaling LOST** —
+worse than plain at small `N` (2k–7k), the opposite of the hope; deprioritized
+(see the Rescaling section below and [[analytic-scaling-preprocessing]]). Untested
+live levers: analytic as **input feature** or **pretrain init**. See
+[[emulator-sample-efficiency-is-the-goal]].
 
 > CORRECTION: a mid-session read called this a **model-capacity** limit (from
 > `train frac>0.2 = 0.17 ≈ val = 0.20`, i.e. underfitting its own training set).
@@ -130,11 +141,18 @@ Full step-by-step derivation: `analytic_scaling.pdf` / `.tex` (repo root).
   A/B-swappable. `chi2` falls back to a per-batch `self._R` stash that `loss`
   sets, so the inherited trim/focal reduction reuses it.
 
-## Rescaling: WIRED, VERIFIED, RUNNING (as of 2026-06-24)
+## Rescaling: WIRED, but it LOST the sample-efficiency test (2026-06-24)
 
-The rescaling is now integrated into the training run and verified; the only open
-task is reading the `frac>0.2` result. (All code delivered as paste-ready cells —
-the notebook is read-only, never edited in place.)
+> RESULT: as a **target rescaling** it did **not** help — worse than plain at
+> small `N` (2k 0.51 vs 0.57; 3.7k 0.33 vs 0.38), converged by ~7k. **Deprioritized.**
+> Not a bug (chi2 verified exact); mechanism = an *unconfirmed* conditioning
+> hypothesis (one case — not a law). Use the analytic via **input feature** or
+> **pretrain init** instead (untested). Full result: [[analytic-scaling-preprocessing]],
+> levers: [[emulator-sample-efficiency-is-the-goal]].
+
+The rescaling is correctly integrated and verified (chi2 exact); the machinery
+below is sound and reusable — only the *target-rescaling application* underperformed.
+(All code delivered as paste-ready cells — the notebook is read-only, never edited.)
 
 **Approach — loss-side `RescaledChi2`, plain `ResMLP`, R computed on the fly.** R
 is a deterministic function of the cosmological params, so it is never stored (the

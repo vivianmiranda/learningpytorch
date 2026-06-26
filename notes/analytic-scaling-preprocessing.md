@@ -1,11 +1,43 @@
 ---
 name: analytic-scaling-preprocessing
-description: "Physics-informed RATIO preprocessing for the cosmic-shear emulator: multiply each data vector by R = xi_analytic(mid)/xi_analytic(cosmo) from a crude analytic model (E&H zero-baryon, linear, Limber, single-source-plane delta-n(z), H=H0), emulate the flatter residual, divide R back out before the chi2. The ratio cancels cosmology-common nonlinearity so a linear no-halofit model still works. Validated by spread ratio (As-only 0.79, +shape 0.515, +N amplitude 0.456; N=(Om h^2)^ns/h also lifts improved-fraction 0.89->0.98). include_amp=True is the standard. Helps the broadband bulk, NOT the omega_b h^2 floor. Full derivation in analytic_scaling.pdf. WIRED into training (2026-06-24) as a loss-side RescaledChi2 that computes R on the fly from the params it is handed; verified and running, awaiting the frac>0.2 result."
+description: "Physics-informed RATIO preprocessing for the cosmic-shear emulator: multiply each data vector by R = xi_analytic(mid)/xi_analytic(cosmo) from a crude analytic model (E&H zero-baryon, linear, Limber, single-source-plane delta-n(z), H=H0), emulate the flatter residual, divide R back out before the chi2. The ratio cancels cosmology-common nonlinearity so a linear no-halofit model still works. Validated by spread ratio (As-only 0.79, +shape 0.515, +N amplitude 0.456; N=(Om h^2)^ns/h also lifts improved-fraction 0.89->0.98). include_amp=True is the standard. Helps the broadband bulk, NOT the omega_b h^2 floor. Full derivation in analytic_scaling.pdf. RESULT (2026-06-24, NARROW): as a TARGET rescaling it did NOT help on THIS emulator -- on the learning curve WORSE than plain at small N (2k: 0.51 vs 0.57; 3.7k: 0.33 vs 0.38), converged to plain by ~7k. Not a bug (chi2 verified exact). A PLAUSIBLE but UNCONFIRMED mechanism (one case -- do NOT over-generalize to 'any reparametrization hurts') is conditioning: the /R undo reweights the net's output gradient per cosmology, vs the plain net whose output IS the chi2 residual. Actionable (this emulator): deprioritize target rescaling; UNTESTED alternatives = analytic as input feature or pretrain init (keep the plain loss). _analytic_R / E&H machinery reusable for those."
 metadata: 
   node_type: memory
   type: project
   originSessionId: a703cd31-5515-4fe4-8d50-bdf7c9f08651
 ---
+
+**RESULT (2026-06-24, NARROW -- one emulator, one test): target rescaling did NOT
+help here.** Learning-curve test (plain vs rescaled, val frac>0.2):
+
+    N_train   plain   rescaled
+    2000      0.509   0.569
+    3713      0.330   0.384
+    6896      0.245   0.248   (converged)
+
+It was WORSE at small N (where it was meant to help most,
+[[emulator-sample-efficiency-is-the-goal]]) and converged to plain by ~7k. Not a
+bug -- the chi2 is verified exact (chi2 == ||pred-target||^2 to 0.1%, round-trips
+exact) -- so it is an optimization effect, not a metric error.
+
+HYPOTHESIS for why (ONE CASE, UNCONFIRMED -- do NOT generalize to "any
+reparametrization hurts"; most preprocessing reparametrizes and helps): the plain
+net outputs the chi2's own whitened residual (clean ||y-t||^2), whereas rescaling
+(1) whitens dv*R in the PHYSICAL cov basis though dv*R has a different cov (target
+no longer unit-variance), and (2) the /R undo inserts a per-cosmology factor between
+the net output and the loss (gradient carries 1/R, varies cosmology-to-cosmology).
+Untested: this would be CONFIRMED only if fixing the target whitening / the /R
+scaling recovered the benefit -- not attempted.
+
+ACTIONABLE (evidence-based for THIS emulator, not a universal rule): target
+rescaling lost the sample-efficiency test, so deprioritize it. UNTESTED
+alternatives to use the analytic without touching the loss: as an input feature
+(net predicts physical-whitened dv, analytic dv fed as input -> learn the
+correction) or a pretrain init (pretrain on cheap analytic dvs, fine-tune on
+cosmolike, plain loss). The _analytic_R / E&H machinery is reusable for both.
+
+(Everything below is the original design rationale; correct as physics, but the
+TARGET-rescaling application underperformed -- see the result above.)
 
 A preprocessing scheme for the emulator ([[emulator-pipeline-and-goal]]) to
 shrink the target's dynamic range so the network has less to fit.

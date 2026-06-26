@@ -18,8 +18,16 @@ increasing N_train (drawn from the omega_b h^2<0.035 pool; the baseline used onl
     pool = 82k (full physical cs_16; 82k point pending)
 
 More data helps -- a lot -- and the 0.10 goal is already reached at 46k. So the
-floor was simply the 10% training subset being too small; the fix is to train on
-more of the available pool. The note's original name (data coverage) was right.
+floor was simply the 10% training subset being too small; on the TOY problem the
+fix is to train on more of the available pool. The note's original name (data
+coverage) was right.
+
+BUT do not stop at "add data": that is the toy answer. The real target (T=512 +
+w0wa + TATT) makes N_train the binding constraint, so the project goal is SAMPLE
+EFFICIENCY -- the position of this learning curve, the smallest N_train to reach
+the target -- not the floor. See [[emulator-sample-efficiency-is-the-goal]]. The
+levers (rescaling, architecture, features) are to be judged by whether they shift
+this curve LEFT, which is exactly the test they were NOT given this session.
 
 Why the capacity call was wrong (the lesson worth keeping): train == val rules
 out OVERFITTING (low variance) but does NOT prove capacity. A regularized model
