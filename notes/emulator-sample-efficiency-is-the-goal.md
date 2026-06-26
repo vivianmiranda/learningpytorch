@@ -65,10 +65,16 @@ hypothesis, and run the curve/experiment before writing a law.**
   the error (it already crushes oscillation; its blind spot is the smooth
   common-mode), so the penalty is redundant -- see the [[pytorch-teaching-style]]
   skill.
-- LIVE LEVERS (both reduce effective DOF): (1) analytic INPUT feature --
-  AugmentedParamGeometry is BUILT but NOT yet run ([[geometry-loss-composition]]);
-  (2) per-bin ParallelResMLP -- the planned next build, fully specced in
-  [[per-bin-parallel-resmlp-plan]].
+- PER-BIN DENSE-MLP SPLIT FAILED (2026-06-25): a per-bin ParallelResMLP came out
+  WORSE than the single ResMLP (~0.27 vs ~0.24) -- it threw away the shared
+  cosmology map and a dense MLP can't exploit output-axis structure anyway
+  ([[per-bin-parallel-resmlp-plan]]).
+- LIVE LEVERS (both reduce effective DOF, both keep the shared trunk):
+  (1) analytic INPUT feature -- AugmentedParamGeometry BUILT but NOT yet run
+  ([[geometry-loss-composition]]); (2) SHARED ResMLP trunk + PER-BIN 1D CNN head
+  ([[resmlp-cnn-perbin-architecture]]) -- an AXIS-AWARE output head, with PUBLISHED
+  precedent (the user's CMB paper: ResMLP+TRF/CNN dropped f>0.2 ~0.2 -> ~0.06 vs
+  bare ResMLP). The CNN head is the NEXT BUILD and the most promising lever.
 
 **Why (the binding constraint at the real scale).** The notebook
 ([[emulator-pipeline-and-goal]]) is a TESTBED: w0wa cosmic shear, ~12 params,

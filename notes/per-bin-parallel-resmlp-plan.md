@@ -6,8 +6,22 @@ metadata:
   type: project
 ---
 
-**STATUS: PLANNED, NOT BUILT (2026-06-25). Start here next.** The lever to try
-for [[emulator-sample-efficiency-is-the-goal]]: a per-bin ParallelResMLP.
+**STATUS: BUILT + RUN 2026-06-25 -- FAILED, SUPERSEDED by
+[[resmlp-cnn-perbin-architecture]].** The pure per-bin ResMLP split came out WORSE
+than the single ResMLP (~0.27 vs ~0.24 frac>0.2, at matched params). Why: (a) it
+threw away the SHARED cosmology->dv map -- 30 heads each re-learned it alone, the
+hard part replicated 30x not divided; and (b) a dense MLP is
+OUTPUT-PERMUTATION-INVARIANT, so it never exploited the within-bin theta-smoothness
+anyway (the dv's smooth-bins / sawtooth-theta / boundary-jumps layout is real but
+INVISIBLE to a dense MLP -- reorder the outputs+targets+Cinv and it trains
+identically). The fix is an AXIS-AWARE head (1D CNN) on a SHARED trunk, see
+[[resmlp-cnn-perbin-architecture]]. The block-diagonal geometry + grouped batching
+(GroupedLinear / einsum "gbi,gio->gbo" / groups=n_bins) below are CORRECT and
+reusable for the CNN version; only the per-bin DENSE-MLP split is the dead part.
+The original plan (still accurate as code) follows.
+
+The lever to try for [[emulator-sample-efficiency-is-the-goal]]: a per-bin
+ParallelResMLP.
 
 **The lever.** One ResMLP head per tomographic bin = (xi+/-, source pair (i,j)).
 Each head sees the full params, outputs only its bin's kept elements. Rationale:
