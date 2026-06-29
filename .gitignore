@@ -4,3 +4,4 @@
 .vscode/
 .broadcast.py.swp
 .DS_Store
+*.pyc
