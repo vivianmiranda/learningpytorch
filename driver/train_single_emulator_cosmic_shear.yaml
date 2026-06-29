@@ -26,9 +26,16 @@ train_args:
   loss_mode: sqrt        # sqrt | chi2 | sqrt_dchi2
   silent:    false       # false -> per-epoch progress lines
 
-  model:                 # cls is fixed to ResMLP in the script
+  model:                 # name picks the class; other keys are its kwargs
+    name:        resmlp    # resmlp | rescnn
     int_dim_res: 128
     n_blocks:    4
+    # ResCNN-only knobs (ignored by ResMLP) -- uncomment for rescnn:
+    # kernel_size:  11       # conv kernel width (odd)
+    # channels:     16       # conv filters in the 1D-CNN appendix
+    # n_blocks_cnn: 1        # stacked CNN correction blocks
+    # gate_init:    0.1      # initial correction-gate scale (small, not 0)
+    # compile_mode: default  # CUDA: ResCNN may need this, not reduce-overhead
 
   optimizer:             # cls is fixed to AdamW in the script
     weight_decay: 0.0

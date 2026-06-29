@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
-"""Optuna search over the single xi ResMLP emulator's hyperparams."""
+"""Optuna search over the single xi emulator's hyperparams (ResMLP/ResCNN)."""
 
 #-------------------------------------------------------------------------------
 #-------------------------------------------------------------------------------
 # Example how to run this program
 #-------------------------------------------------------------------------------
 #-------------------------------------------------------------------------------
-# This is the TUNING twin of train_single_resmlp_emulator_cosmic_shear.py: the
-# same single cosmic-shear (xi) ResMLP setup, but instead of one training run it
-# runs an Optuna study that minimizes the validation f(delta-chi2 > 0.2).
+# This is the TUNING twin of train_single_emulator_cosmic_shear.py: the same
+# single cosmic-shear (xi) emulator setup (ResMLP or ResCNN, chosen in the
+# YAML), but instead of one training run it runs an Optuna study that minimizes
+# the validation f(delta-chi2 > 0.2).
 #
-#     python driver/tune_single_resmlp_emulator_cosmic_shear.py \
-#       --yaml driver/tune_single_resmlp_emulator_cosmic_shear.yaml \
+#     python driver/tune_single_emulator_cosmic_shear.py \
+#       --yaml driver/tune_single_emulator_cosmic_shear.yaml \
 #       --n-trials 50 --timeout 4200
 #
 #- WHICH hyperparameters are searched is read from the YAML train_args block. A
@@ -36,8 +37,11 @@
 #  and the ResBlock activation are not searched here) -- see the training driver.
 #- `--quiet` suppresses all stdout (per-trial lines and the final summary).
 #
-#- Fixed in the script: probe = xi, model = ResMLP, optimizer = AdamW,
-#  scheduler = ReduceLROnPlateau, use_amp = False, and the report thresholds.
+#- The fixed single-emulator choices (probe = xi, AdamW, ReduceLROnPlateau,
+#  use_amp = False, the report thresholds, the resmlp/rescnn registry) are
+#  EmulatorExperiment defaults (emulator/experiment.py), shared with the
+#  training driver. The MODEL is the YAML's choice (train_args.model.name =
+#  resmlp | rescnn), fixed across the study (only the hyperparameters vary).
 #
 #- Output: stdout only -- a per-trial line (frac>0.2, running best, params) and a
 #  final summary of the best frac>0.2 and the best parameters. No files written.
@@ -48,10 +52,6 @@ import argparse
 import os
 import sys
 
-import torch
-import torch.optim as optim
-from torch.optim import lr_scheduler
-import yaml
 import optuna
 
 # The emulator package sits ONE directory up from this driver/
@@ -62,29 +62,13 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
   sys.path.insert(0, ROOT)
 
-from emulator.data_staging import read_param_names, load_source
-from emulator.geometries_parameter import ParamGeometry
-from emulator.geometries_output import DataVectorGeometry
-from emulator.loss_functions import make_chi2
-from emulator.emulator_designs import ResMLP
-from emulator.activations import make_activation
-from emulator.training import (
-  run_emulator, build_run_specs, pick_device,
-  suggest_train_args, search_defaults)
-
-
-# --- fixed choices for THIS driver (a single xi ResMLP) ---
-PROBE     = "xi"
-MODEL_CLS = ResMLP
-OPT_CLS   = optim.AdamW
-SCHED_CLS = lr_scheduler.ReduceLROnPlateau
-USE_AMP   = False
-THRESHOLDS = torch.tensor([0.2, 0.5, 1.0, 10.0, 100.0])
+from emulator.training import suggest_train_args, search_defaults
+from emulator.experiment import EmulatorExperiment
 
 
 def main():
   parser = argparse.ArgumentParser(
-    prog="tune_single_resmlp_emulator_cosmic_shear")
+    prog="tune_single_emulator_cosmic_shear")
   parser.add_argument("--yaml",
                       dest="yaml",
                       help="config YAML with the data and "
@@ -127,95 +111,43 @@ def main():
                       action="store_true")
   args, unknown = parser.parse_known_args()
 
-  # --quiet silences the driver's own stdout; run_emulator and
-  # load_source are silenced through their own flags below.
-  def log(*a, **kw):
-    if not args.quiet:
-      print(*a, **kw)
-
-  with open(args.yaml) as f:
-    cfg = yaml.safe_load(f)
-  for block in ("data", "train_args"):
-    if block not in cfg:
-      raise KeyError(f"YAML is missing the required block: {block!r}")
-  data = cfg["data"]
-  # raw_ta KEEPS the search ranges (suggest_train_args resolves them
-  # per trial); do NOT collapse them to defaults here.
-  raw_ta = cfg["train_args"]
-
-  device = pick_device()
-  torch.set_float32_matmul_precision("high")
-  log(f"device: {device}  |  rescale: {args.rescale}  "
-      f"|  activation: {args.activation}")
-
-  gen = torch.Generator().manual_seed(int(data["split_seed"]))
-  names = read_param_names(data["train_covmat"])
-
+  # the whole setup -- config parse, model resolution, device, data
+  # staging, geometry, chi2, and the per-run spec assembly -- lives in
+  # EmulatorExperiment, shared with the training driver. The geometry /
+  # chi2 / activation are FIXED across the study, so build them once
+  # here; only the searched train_args vary per trial. The fixed
+  # single-emulator choices are the EmulatorExperiment defaults; the
+  # MODEL is the YAML's choice (train_args.model.name).
+  exp = EmulatorExperiment.from_yaml(args.yaml,
+                                     rescale=args.rescale,
+                                     activation=args.activation,
+                                     quiet=args.quiet)
+  # the experiment's quiet-gated logger, reused below.
+  log = exp.log
+  log(f"device: {exp.device}  |  rescale: {exp.rescale}  "
+      f"|  activation: {exp.activation}")
   log("loading sources:")
-  train_set = load_source(dv_path=data["train_dv"],
-                          params_path=data["train_params"],
-                          names=names,
-                          cut=data["omegabh2_cut"],
-                          divisor=data["train_divisor"],
-                          gen=gen,
-                          ram_frac=data.get("ram_frac", 0.7),
-                          with_means=True,
-                          verbose=not args.quiet)
-  val_set = load_source(dv_path=data["val_dv"],
-                        params_path=data["val_params"],
-                        names=names,
-                        cut=data["omegabh2_cut"],
-                        divisor=data["val_divisor"],
-                        gen=gen,
-                        ram_frac=data.get("ram_frac", 0.7),
-                        with_means=False)
+  exp.stage_train()
+  exp.stage_val()
+  exp.build_geometry()
 
-  # geometry, chi2, and activation are FIXED across the study (only
-  # the searched train_args vary per trial), so build them once.
-  pgeom = ParamGeometry.from_covmat(device=device,
-                                    center=train_set["C_mean"],
-                                    covmat_path=data["train_covmat"])
-  geom = DataVectorGeometry.from_cosmolike(
-    device=device,
-    dv_center=train_set["dv_mean"],
-    data_dir=data["cosmolike_data_dir"],
-    dataset=data["cosmolike_dataset"],
-    probe=PROBE)
-  chi2fn = make_chi2(
-    geom=geom,
-    rescale=args.rescale,
-    param_geometry=pgeom,
-    cosmo_mid=train_set["C"][train_set["idx"]].mean(0),
-    data_dir=data["cosmolike_data_dir"],
-    dataset=data["cosmolike_dataset"])
-  act = make_activation(args.activation)
-
+  # raw_train_args KEEPS the search ranges (exp.train_args collapsed
+  # them to defaults); suggest_train_args resolves them per trial.
+  raw_ta = exp.raw_train_args
   ranges = search_defaults(raw_ta)
   if not ranges:
     log("WARNING: no [default, min, max, kind] search ranges in "
         "train_args -- every trial is identical.")
 
   def objective(trial):
-    # this trial's concrete train_args (each range -> a suggestion).
+    # this trial's concrete train_args (each range -> a suggestion);
+    # exp.train builds the per-run specs (model / optimizer / scheduler
+    # + activation + the ResCNN geom) on the FIXED data + geometry.
+    # silent=True so every trial trains quietly even when the study
+    # itself is not --quiet.
     ta = suggest_train_args(trial, raw_ta)
-    specs = build_run_specs(train_args=ta,
-                            model_cls=MODEL_CLS,
-                            opt_cls=OPT_CLS,
-                            sched_cls=SCHED_CLS)
-    specs["model_opts"].setdefault("block_opts", {})["act"] = act
     (_m, _tl, medians,
-     _mn, fracs) = run_emulator(train_set=train_set,
-                                val_set=val_set,
-                                chi2fn=chi2fn,
-                                param_geometry=pgeom,
-                                nepochs=ta["nepochs"],
-                                bs=ta["bs"],
-                                loss_mode=ta.get("loss_mode", "sqrt"),
-                                thresholds=THRESHOLDS,
-                                use_amp=USE_AMP,
-                                silent=True,
-                                device=device,
-                                **specs)
+     _mn, fracs) = exp.train(train_args=ta, silent=True)
     # the run restored its best-frac>0.2 epoch (median tiebreaker);
     # the study minimizes that frac>0.2.
     best = min(range(len(fracs)),

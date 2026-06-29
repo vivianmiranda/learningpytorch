@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
-"""Train ONE cosmic-shear (xi) ResMLP emulator from a YAML config."""
+"""Train ONE cosmic-shear (xi) emulator (ResMLP or ResCNN) from a YAML."""
 
 #-------------------------------------------------------------------------------
 #-------------------------------------------------------------------------------
 # Example how to run this program
 #-------------------------------------------------------------------------------
 #-------------------------------------------------------------------------------
-# This script trains a SINGLE cosmic-shear (xi) emulator: a ResMLP that maps
+# This script trains a SINGLE cosmic-shear (xi) emulator -- a ResMLP, or a
+# ResCNN (ResMLP trunk + a 1D-CNN appendix), chosen in the YAML -- that maps
 # cosmological parameters to the whitened, masked xi data vector, with the
 # full-3x2pt chi2 (cosmolike's masked inverse covariance) as the loss.
 #
-#     python driver/train_single_resmlp_emulator_cosmic_shear.py \
-#       --yaml driver/train_single_resmlp_emulator_cosmic_shear.yaml \
+#     python driver/train_single_emulator_cosmic_shear.py \
+#       --yaml driver/train_single_emulator_cosmic_shear.yaml \
 #       --diagnostic diagnostic.pdf
 #
 #- Run it from a directory where the YAML's (relative) data paths resolve, e.g.
@@ -28,9 +29,11 @@
 #    (omegabh2_cut, train_divisor, val_divisor, split_seed, ram_frac), and the
 #    cosmolike dataset (cosmolike_data_dir, cosmolike_dataset).
 #  - `train_args`: the training knobs (nepochs, bs, loss_mode, silent) plus the
-#    sub-blocks model (int_dim_res, n_blocks), optimizer (weight_decay), lr
-#    (lr_base, bs_base, warmup_epochs), scheduler (mode, patience, factor), and
-#    trim / focus (the robustness schedules).
+#    sub-blocks model (name = resmlp | rescnn, then that model's kwargs --
+#    int_dim_res, n_blocks, and for rescnn kernel_size / channels /
+#    n_blocks_cnn / gate_init), optimizer (weight_decay), lr (lr_base, bs_base,
+#    warmup_epochs), scheduler (mode, patience, factor), and trim / focus (the
+#    robustness schedules).
 #
 #- `--diagnostic` (optional) saves a MULTIPAGE diagnostics PDF to the given
 #  path: page 1 (2x2) the training history + the coverage diagnostic (do the
@@ -53,11 +56,12 @@
 #  load_source's per-source line, and run_emulator's per-epoch log. The
 #  --diagnostic PDF is still written.
 #
-#- Fixed IN THE SCRIPT (not the YAML), the choices that make this THIS driver:
-#  probe = xi, model = ResMLP, optimizer = AdamW, scheduler = ReduceLROnPlateau,
-#  use_amp = False, and the reported delta-chi2 thresholds [0.2, 0.5, 1, 10,
-#  100] (0.2 is the goal and the model-selection metric). To train a different
-#  model or probe, copy this driver and change those constants.
+#- The fixed single-emulator choices -- probe = xi, optimizer = AdamW, scheduler
+#  = ReduceLROnPlateau, use_amp = False, the reported delta-chi2 thresholds
+#  [0.2, 0.5, 1, 10, 100] (0.2 = the goal and the model-selection metric), and
+#  the resmlp/rescnn registry -- are EmulatorExperiment defaults (in emulator/
+#  experiment.py, which also holds the setup so a sweep script can reuse it).
+#  The MODEL is the YAML's choice (train_args.model.name = resmlp | rescnn).
 #
 #- Inputs (paths set in the YAML `data` block):
 #
@@ -79,45 +83,22 @@ import argparse
 import os
 import sys
 
-import torch
-import torch.optim as optim
-from torch.optim import lr_scheduler
-import yaml
-
 # The emulator package sits ONE directory up from this driver/
 # folder. Put the repo root on sys.path so `import emulator`
 # resolves regardless of the working directory: launching
 # `python driver/foo.py` puts driver/ (the script's own folder),
 # NOT the repo root, on sys.path -- so without this the absolute
-# imports below would fail.
+# import below would fail.
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
   sys.path.insert(0, ROOT)
 
-from emulator.data_staging import read_param_names, load_source
-from emulator.geometries_parameter import ParamGeometry
-from emulator.geometries_output import DataVectorGeometry
-from emulator.loss_functions import make_chi2
-from emulator.emulator_designs import ResMLP
-from emulator.activations import make_activation
-from emulator.training import (
-  run_emulator, build_run_specs, pick_device, default_train_args)
-
-
-# --- fixed choices for THIS driver (a single xi ResMLP) ---
-PROBE     = "xi"
-MODEL_CLS = ResMLP
-OPT_CLS   = optim.AdamW
-SCHED_CLS = lr_scheduler.ReduceLROnPlateau
-USE_AMP   = False
-# delta-chi2 cutoffs the val fractions are reported over; the
-# first (0.2) is the emulator goal and the model-selection metric.
-THRESHOLDS = torch.tensor([0.2, 0.5, 1.0, 10.0, 100.0])
+from emulator.experiment import EmulatorExperiment
 
 
 def main():
   parser = argparse.ArgumentParser(
-    prog="train_single_resmlp_emulator_cosmic_shear")
+    prog="train_single_emulator_cosmic_shear")
   parser.add_argument("--yaml",
                       dest="yaml",
                       help="training YAML with the data and "
@@ -160,106 +141,24 @@ def main():
                       action="store_true")
   args, unknown = parser.parse_known_args()
 
-  # --quiet silences the driver's own stdout; run_emulator and
-  # load_source are silenced through their own flags below.
-  def log(*a, **kw):
-    if not args.quiet:
-      print(*a, **kw)
-
-  with open(args.yaml) as f:
-    cfg = yaml.safe_load(f)
-  for block in ("data", "train_args"):
-    if block not in cfg:
-      raise KeyError(f"YAML is missing the required block: {block!r}")
-  data = cfg["data"]
-  # default_train_args collapses any [default, min, max, kind]
-  # search ranges to their default, so a YAML written for the
-  # tuning driver also trains fine here (it uses the first value).
-  ta   = default_train_args(cfg["train_args"])
-
-  device = pick_device()
-  # TF32 tensor-core float32 matmuls (Ampere+); no effect on
-  # CPU/MPS. One-time global switch.
-  torch.set_float32_matmul_precision("high")
-  log(f"device: {device}  |  rescale: {args.rescale}")
-
-  # a local Generator fixes the train/val split independently of
-  # the model-init RNG.
-  gen = torch.Generator().manual_seed(int(data["split_seed"]))
-
-  # parameter names come from the TRAINING covmat header and are
-  # reused for the val cut (same columns).
-  names = read_param_names(data["train_covmat"])
-
+  # all the setup -- config parse + model resolution + device + data
+  # staging + geometry + chi2 + spec assembly -- lives in
+  # EmulatorExperiment, so a sweep script reuses it instead of copying
+  # it. The fixed single-emulator choices (probe = xi, AdamW,
+  # ReduceLROnPlateau, use_amp = False, the report thresholds, the
+  # resmlp/rescnn registry) are the EmulatorExperiment defaults; the
+  # MODEL is the YAML's choice (train_args.model.name). This driver
+  # passes only what it varies (the YAML, rescale, activation, quiet).
+  exp = EmulatorExperiment.from_yaml(args.yaml,
+                                     rescale=args.rescale,
+                                     activation=args.activation,
+                                     quiet=args.quiet)
+  # the experiment's quiet-gated logger, reused below.
+  log = exp.log
+  log(f"device: {exp.device}  |  rescale: {exp.rescale}")
   log("loading sources:")
-  train_set = load_source(dv_path=data["train_dv"],
-                          params_path=data["train_params"],
-                          names=names,
-                          cut=data["omegabh2_cut"],
-                          divisor=data["train_divisor"],
-                          gen=gen,
-                          ram_frac=data.get("ram_frac", 0.7),
-                          with_means=True,
-                          verbose=not args.quiet)
-  val_set = load_source(dv_path=data["val_dv"],
-                        params_path=data["val_params"],
-                        names=names,
-                        cut=data["omegabh2_cut"],
-                        divisor=data["val_divisor"],
-                        gen=gen,
-                        ram_frac=data.get("ram_frac", 0.7),
-                        with_means=False,
-                        verbose=not args.quiet)
-
-  # input whitening from the covmat; output geometry + chi2 from
-  # cosmolike. Both are built from the TRAINING source only and
-  # applied unchanged to val.
-  pgeom = ParamGeometry.from_covmat(device=device,
-                                    center=train_set["C_mean"],
-                                    covmat_path=data["train_covmat"])
-  geom = DataVectorGeometry.from_cosmolike(
-    device=device,
-    dv_center=train_set["dv_mean"],
-    data_dir=data["cosmolike_data_dir"],
-    dataset=data["cosmolike_dataset"],
-    probe=PROBE)
-  chi2fn = make_chi2(
-    geom=geom,
-    rescale=args.rescale,
-    param_geometry=pgeom,
-    cosmo_mid=train_set["C"][train_set["idx"]].mean(0),
-    data_dir=data["cosmolike_data_dir"],
-    dataset=data["cosmolike_dataset"])
-
-  # the six {cls, **kwargs} spec dicts run_emulator consumes; the
-  # CLASSES are this driver's fixed choices, the settings come
-  # from the YAML. Keyed by run_emulator's argument names, so they
-  # splat straight in as **specs below.
-  specs = build_run_specs(train_args=ta,
-                          model_cls=MODEL_CLS,
-                          opt_cls=OPT_CLS,
-                          sched_cls=SCHED_CLS)
-
-  # the activation is a factory callable, so it cannot live in the
-  # YAML -- select it by name here and inject it into the model's
-  # ResBlock options (setdefault keeps any block_opts the YAML set).
-  act = make_activation(args.activation)
-  specs["model_opts"].setdefault("block_opts", {})["act"] = act
-
   (model, train_losses, medians,
-   means, fracs) = run_emulator(train_set=train_set,
-                                val_set=val_set,
-                                chi2fn=chi2fn,
-                                param_geometry=pgeom,
-                                nepochs=ta["nepochs"],
-                                bs=ta["bs"],
-                                loss_mode=ta.get("loss_mode", "sqrt"),
-                                thresholds=THRESHOLDS,
-                                use_amp=USE_AMP,
-                                silent=ta.get("silent", False)
-                                       or args.quiet,
-                                device=device,
-                                **specs)
+   means, fracs) = exp.run()
 
   # run_emulator already restored the best-frac>0.2 epoch; report
   # which one that was. fracs[i][0] is the frac>0.2 at epoch i+1,
@@ -282,11 +181,11 @@ def main():
     # (1) coverage: do the failing val points sit in sparse regions
     # of the training set? (local kNN sparsity vs delta-chi2).
     cov = coverage_diagnostic(model=model,
-                              param_geometry=pgeom,
-                              chi2fn=chi2fn,
-                              train_set=train_set,
-                              val_set=val_set,
-                              device=device)
+                              param_geometry=exp.pgeom,
+                              chi2fn=exp.chi2fn,
+                              train_set=exp.train_set,
+                              val_set=exp.val_set,
+                              device=exp.device)
     log(f"coverage: spearman(knn_dist, log dchi2) "
         f"{cov['spearman']:+.3f}  |  median knn good "
         f"{cov['median_good']:.3f} bad {cov['median_bad']:.3f}  "
@@ -297,22 +196,22 @@ def main():
                  else "NOT clearly coverage: failures not sparser"))
     # (2) hard-direction regression (works for any chi2fn).
     hd = hard_direction_regression(model=model,
-                                   param_geometry=pgeom,
-                                   chi2fn=chi2fn,
-                                   val_set=val_set,
-                                   device=device)
+                                   param_geometry=exp.pgeom,
+                                   chi2fn=exp.chi2fn,
+                                   val_set=exp.val_set,
+                                   device=exp.device)
     log(f"hardness: joint log-linear R2 {hd['r2']:.3f}  |  "
         f"ln(omega_b h2) alone {hd['r2_omega']:.3f}")
     # (3) local-linear data floor -- ONLY for a plain chi2fn (the
     # rescaled encode/chi2 would need each point's own R).
     floor = None
-    if not getattr(chi2fn, "needs_params", False):
+    if not getattr(exp.chi2fn, "needs_params", False):
       floor = local_linear_floor(model=model,
-                                 param_geometry=pgeom,
-                                 chi2fn=chi2fn,
-                                 train_set=train_set,
-                                 val_set=val_set,
-                                 device=device)
+                                 param_geometry=exp.pgeom,
+                                 chi2fn=exp.chi2fn,
+                                 train_set=exp.train_set,
+                                 val_set=exp.val_set,
+                                 device=exp.device)
       log(f"floor: f_model {floor['f_model']:.3f}  "
           f"f_floor {floor['f_floor']:.3f}  "
           f"pure hardness {floor['f_hard']:.3f}")
@@ -323,7 +222,7 @@ def main():
                      medians=medians,
                      means=means,
                      fracs=fracs,
-                     thresholds=THRESHOLDS,
+                     thresholds=exp.thresholds,
                      coverage=cov,
                      floor=floor,
                      hard_dir=hd,

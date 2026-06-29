@@ -31,9 +31,17 @@ train_args:
   bs:        256
   loss_mode: sqrt
 
-  model:
+  model:                 # name picks the class; other keys are its kwargs
+    name:        resmlp                # resmlp | rescnn (fixed across study)
     int_dim_res: [128, 64, 256, int]   # searched
     n_blocks:    [4, 2, 6, int]        # searched
+    # ResCNN-only knobs (ignored by ResMLP) -- uncomment for rescnn; each
+    # may be a fixed value or a [default, min, max, kind] search range:
+    # kernel_size:  11
+    # channels:     16
+    # n_blocks_cnn: 1
+    # gate_init:    0.1
+    # compile_mode: default            # CUDA: ResCNN may need this
 
   optimizer:
     weight_decay: 0.0

@@ -196,9 +196,9 @@ def read_param_names(covmat_path, comment="#"):
     return f.readline().lstrip(comment).split()
 
 
-def load_source(dv_path, params_path, names, cut, divisor,
-                gen, ram_frac=0.7, with_means=False,
-                param_cols=slice(2, -1), verbose=True):
+def load_source(dv_path, params_path, names, cut, divisor=None,
+                gen=None, ram_frac=0.7, with_means=False,
+                param_cols=slice(2, -1), verbose=True, n_keep=None):
   """
   Load, physically cut, and stage one dv/param source.
 
@@ -219,8 +219,9 @@ def load_source(dv_path, params_path, names, cut, divisor,
                   order of the KEPT columns), used by phys_cut_idx
                   to find the omegab / H0 columns.
     cut         = upper bound on omega_b h^2 (rows >= cut dropped).
-    divisor     = keep N // divisor rows (10 -> ~1/10 for train).
-    gen         = torch.Generator seeding the train/val shuffle.
+    divisor     = keep N // divisor rows (10 -> ~1/10 for train); pass
+                  this OR n_keep (exactly one).
+    gen         = torch.Generator seeding the cut+shuffle (required).
     ram_frac    = fraction of available RAM stage_source may fill
                   (default 0.7).
     with_means  = if True, also compute C_mean / dv_mean (the
@@ -230,11 +231,21 @@ def load_source(dv_path, params_path, names, cut, divisor,
                   lnp and the trailing chi2 column).
     verbose     = if True (default), print a one-line summary of
                   the staged source (shapes, rows, in-RAM).
+    n_keep      = absolute number of rows to keep (overrides divisor;
+                  for a learning-curve sweep at explicit sizes). Pass
+                  this OR divisor (exactly one).
 
   Returns:
     a source dict {"C", "dv", "idx"} (plus "C_mean" / "dv_mean"
     when with_means), ready for build_loaders / run_emulator.
   """
+  # require a generator and exactly one sizing rule.
+  if gen is None:
+    raise ValueError("load_source needs a torch.Generator (gen=)")
+  if (divisor is None) == (n_keep is None):
+    raise ValueError(
+      "pass exactly one of divisor (keep N // divisor rows) or "
+      "n_keep (an absolute row count)")
   dv = np.load(dv_path, mmap_mode="r", allow_pickle=False)
   # keep only the modeled parameter columns (param_cols drops the
   # weight / lnp / chi2 bookkeeping columns by default).
@@ -247,7 +258,8 @@ def load_source(dv_path, params_path, names, cut, divisor,
   n     = C.shape[0]
   order = torch.randperm(n, generator=gen).numpy()
   phys  = phys_cut_idx(C=C, idx=order, names=names, cut=cut)
-  keep  = int(n // divisor)
+  # rows to keep: an absolute n_keep, or N // divisor.
+  keep  = int(n_keep) if n_keep is not None else int(n // divisor)
   if len(phys) < keep:
     raise ValueError(
       f"physical pool too small: {len(phys)} < {keep}")

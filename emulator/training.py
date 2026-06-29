@@ -30,6 +30,30 @@ def pick_device(name=None):
   return torch.device("cpu")
 
 
+def make_logger(quiet=False):
+  """
+  Build a print function gated by a quiet flag.
+
+  Returns a `log(*args, **kwargs)` callable that forwards to the
+  builtin print when `quiet` is False and is a no-op when True --
+  the standard "--quiet" stdout gate a CLI driver wraps its own
+  prints in (run_emulator and load_source carry their own silence
+  flags). `quiet` is captured once, at build time.
+
+  Arguments:
+    quiet = if True, the returned logger swallows every call (prints
+            nothing); if False (default), it forwards to print.
+
+  Returns:
+    log = a function with print's signature (*args, **kwargs) that
+          prints unless quiet.
+  """
+  def log(*args, **kwargs):
+    if not quiet:
+      print(*args, **kwargs)
+  return log
+
+
 def make_model(model_opts, input_dim, output_dim, device):
   """
   Build the network from a spec dict.
