@@ -12,6 +12,11 @@ break after the opening `(` and indent the continuation lines by **2 spaces**
 (a hanging indent). Do **not** align the arguments under the opening
 parenthesis.
 
+**SCOPE (2026-06-29): this is the slide-NOTEBOOK rule.** The ported .py package
+(`emulator/`) and the CLI drivers (`driver/`) use **paren-alignment** instead
+(one argument per line aligned under the opening paren) at a 90-col budget -- the
+user's choice for real code. See [[py-module-style-conventions]].
+
 ```python
 # preferred
 load_C, load_dv, load = build_loaders(

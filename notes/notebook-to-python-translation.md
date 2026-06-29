@@ -6,6 +6,14 @@ metadata:
   type: project
 ---
 
+**STATUS 2026-06-29: STRUCTURE DONE.** The notebook's "Data Vector emulator
+exercise 1" section is now the `emulator/` package + `driver/` CLI scripts (full
+layout, helpers, drivers, search-range convention in [[emulator-python-package]];
+the .py code style in [[py-module-style-conventions]]). The two rules below STILL
+apply to the remaining cells and any new modules. What's left: wider CLI coverage
+of the rest of the notebook, more drivers/variants (ResCNN, IA/TATT), and the
+per-module documentation double-check.
+
 TODO queued 2026-06-26 (do AFTER the high-T TATT stress test,
 [[npce-and-ia-template-factoring]]): translate pytorch1.ipynb (the cosmic-shear
 emulator) from a Jupyter notebook into standalone **Python files with

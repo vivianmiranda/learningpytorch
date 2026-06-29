@@ -14,6 +14,22 @@ full 3x2pt chi2 via cosmolike's masked inverse covariance.
 - cosmolike (`ci`) runs only on the workstation; only the user can run cosmolike
   cells — review such code statically.
 
+## Python package + drivers — TRANSLATION (2026-06-29)
+
+The notebook's "Data Vector emulator exercise 1" section is now a real Python
+package `emulator/` + CLI drivers `driver/` (byte-faithful port; structure done).
+Full layout, library helpers, the search-range YAML convention, and the .py code
+style live in `notes/emulator-python-package.md` and
+`notes/py-module-style-conventions.md`. Two drivers:
+`train_single_resmlp_emulator_cosmic_shear.py` (one run; flags `--yaml`,
+`--diagnostic <multipage.pdf>`, `--rescale {none,rescaled,residual}`,
+`--activation`, `--quiet`) and `tune_single_resmlp_emulator_cosmic_shear.py`
+(Optuna search; adds `--n-trials`, `--timeout`). ONE YAML serves both — a
+train_args leaf is a fixed scalar or a `[default, min, max, kind]` search range
+(kind = int|float|log) that collapses to its default for plain training.
+`pytorch1.ipynb` stays the read-only reference; .py code uses named params +
+paren-alignment + 90 cols (NOT the slide rules).
+
 ## Where the emulator stands — FLOOR IS DATA-LIMITED (settled 2026-06-24)
 
 With the physical cut `omega_b h^2 < 0.035`, the baseline `frac>0.2 ≈ 0.20` used
