@@ -10,6 +10,21 @@ Forward-looking strategy for scaling the emulator ([[emulator-pipeline-and-goal]
 [[emulator-sample-efficiency-is-the-goal]]) to high dimension and many LCDM
 extensions (Roman: more n(z) bins; w0wa, TATT, neutrinos, modified gravity).
 
+**STATUS UPDATE 2026-06-26: the template-factoring LEVER below is now BUILT and
+NLA-validated -- see [[npce-and-ia-template-factoring]] for the implementation
+(IAFactorGeometry / IATemplateMLP / IATemplateChi2 + nla_coeffs/tatt_coeffs).** Two
+refinements learned in building it: (1) implement the factoring as an ARCHITECTURE
+on the EXISTING scattered samples (the amplitudes already sampled from their prior,
+read per-sample by the loss), NOT as structured re-simulation/extraction -- same
+sims, apples-to-apples, the templates are identified implicitly. (2) Only the
+amplitudes (linear coefficients) factor out; the redshift-evolution POWERS (eta,
+inside the integral) STAY emulated -- the amplitude/power split. NLA factoring came
+out NEUTRAL on the toy (the amplitude is the easy/narrow-prior direction) -- the win
+SCALES WITH PRIOR WIDTH, so it is the real payoff for TATT's wide coupled amplitudes,
+not for the toy. PCE/NPCE (a smoothness prior) was the OTHER thing tried this session
+and FAILED to move the floor -- smoothness is not the missing ingredient
+([[npce-and-ia-template-factoring]]); exact structure (this) is.
+
 **Governing principle: EFFECTIVE dimension, not nominal parameter count.** Emulator
 sample complexity scales with the number of directions the dv depends on STRONGLY
 and NONLINEARLY (the active subspace), not with the total parameter count. Evidence
