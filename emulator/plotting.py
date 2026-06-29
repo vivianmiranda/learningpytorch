@@ -160,6 +160,65 @@ def plot_history(train_losses,
   _finish(fig, savepath)
 
 
+def plot_learning_curves(curves,
+                         threshold=0.2,
+                         target=0.10,
+                         savepath=None):
+  """
+  Overlay one or more learning curves: f(delta-chi2 > threshold) vs
+  N_train.
+
+  One descending curve per entry, on log-log axes (the small-N regime,
+  where methods separate, is spread out). A curve still falling at the
+  largest N means data-limited (more data helps); a flat tail means
+  capacity / architecture-limited. The lines use a colorblind palette +
+  a marker cycle (no red/green), so a single-config sweep passes a
+  one-entry dict and a bake-off passes one entry per variant.
+
+  Arguments:
+    curves    = mapping label -> the curve, where the curve is EITHER a
+                {N_train: frac} dict OR an (sizes, fracs) pair (both are
+                sorted by N here). label is the legend text.
+    threshold = the delta-chi2 cutoff the fraction counts (default 0.2,
+                the emulator goal); labels the y axis.
+    target    = a horizontal guide at the target fraction (default 0.10);
+                None to omit it.
+    savepath  = if given, write the figure there and close; else show.
+  """
+  # marker cycle so overlaid curves stay distinguishable in print.
+  markers = ["o", "D", "^", "s", "v", "P"]
+  fig, ax = plt.subplots(figsize=(6.8, 5.6))
+  for k, (label, curve) in enumerate(curves.items()):
+    # accept either {N: frac} or a (sizes, fracs) pair.
+    if isinstance(curve, dict):
+      sizes = np.array(sorted(curve), dtype="float64")
+      fracs = np.array([curve[n] for n in sorted(curve)],
+                       dtype="float64")
+    else:
+      sizes = np.asarray(curve[0], dtype="float64")
+      fracs = np.asarray(curve[1], dtype="float64")
+      order = np.argsort(sizes)            # plot left-to-right in N
+      sizes, fracs = sizes[order], fracs[order]
+    # x = N_train, y = the fraction over the threshold.
+    ax.plot(sizes,
+            fracs,
+            "-" + markers[k % len(markers)],
+            color=_CB[k % len(_CB)],
+            lw=2.5,
+            ms=8,
+            label=label)
+  ax.set_xscale("log")
+  ax.set_yscale("log")
+  ax.set_xlabel(r"$N_{\rm train}$")
+  ax.set_ylabel(rf"$f(\Delta\chi^2 > {threshold:g})$")
+  if target is not None:
+    ax.axhline(target, color="0.6", ls="--", lw=1,
+               label=f"target {target:g}")
+  ax.legend(frameon=False)
+  fig.tight_layout()
+  _finish(fig, savepath)
+
+
 def _floor_panel(ax, floor):
   """
   Draw the local-linear data-floor panel onto the given axis.

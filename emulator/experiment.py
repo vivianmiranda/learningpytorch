@@ -25,11 +25,12 @@ are built by explicit methods and cached on the instance, so:
 """
 
 import yaml
+import numpy as np
 import torch
 import torch.optim as optim
 from torch.optim import lr_scheduler
 
-from .data_staging import read_param_names, load_source
+from .data_staging import read_param_names, load_source, phys_cut_idx
 from .geometries_parameter import ParamGeometry
 from .loss_functions import make_chi2
 from .emulator_designs import ResMLP, ResCNN
@@ -266,6 +267,30 @@ class EmulatorExperiment:
       with_means=False,
       verbose=not self.quiet)
     return self.val_set
+
+  def pool_size(self):
+    """
+    Number of physically-cut TRAINING rows available -- the natural top
+    of an N_train sweep.
+
+    Loads the training parameter file, keeps the modeled columns, and
+    applies the omega_b h^2 cut (the same cut stage_train uses), then
+    counts the survivors. The count is order-independent, so no shuffle
+    or staging is done. Uses load_source's default modeled columns
+    (slice(2, -1)).
+
+    Returns:
+      the number of training rows with omega_b h^2 <
+      data["omegabh2_cut"] (an int).
+    """
+    d = self.data
+    # modeled parameter columns (drop the leading weight / lnp and the
+    # trailing chi2), as load_source does by default.
+    C   = np.loadtxt(d["train_params"], dtype="float32")[:, slice(2, -1)]
+    idx = np.arange(C.shape[0])
+    phys = phys_cut_idx(C=C, idx=idx, names=self.names,
+                        cut=d["omegabh2_cut"])
+    return int(len(phys))
 
   def build_geometry(self, train_set=None):
     """
