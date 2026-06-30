@@ -17,7 +17,8 @@ bake-off).
 4. [Change X → edit Y](#4-change-x--edit-y)
 5. [Variants](#5-variants)
 6. [Run it](#6-run-it)
-7. [Appendix: every file's functions](#7-appendix-every-files-functions)
+7. [Appendix: the chi2 metric (Mahalanobis)](#7-appendix-the-chi2-metric-mahalanobis)
+8. [Appendix: every file's functions](#8-appendix-every-files-functions)
     1. [`data_staging.py`](#apx-data_staging)
     2. [`geometries_parameter.py`](#apx-geometries_parameter)
     3. [`geometries_output.py`](#apx-geometries_output)
@@ -78,8 +79,9 @@ imports cosmolike, so training runs on the workstation where cosmolike lives.
 The goal is to replace an expensive physics code with a network that maps a
 handful of cosmological parameters to the cosmic-shear data vector, fast enough
 to call inside a cosmological inference and accurate enough that the data
-vector's **chi2** — its distance from truth measured in the data covariance, the
-quantity inference actually cares about — stays small. Two ideas run through the
+vector's [**chi2**](#7-appendix-the-chi2-metric-mahalanobis) — its distance from
+truth measured in the data covariance (a Mahalanobis distance; see the appendix),
+the quantity inference actually cares about — stays small. Two ideas run through the
 whole pipeline. **Whitening**: both the inputs and the outputs are rotated and
 rescaled so the network sees a decorrelated, unit-variance, well-conditioned
 problem instead of raw correlated numbers. **The chi2 metric**: training and
@@ -109,11 +111,64 @@ drops the sparse, unphysical high-`omega_b h^2` corner no real posterior visits,
 and only `N_train` rows are kept. The result is a "source" dict (`C`, `dv`,
 `idx`) the rest of the pipeline consumes.
 
+```
+1.  Stage the data                            load_source · data_staging.py
+
+      dv dump (.npy)                    params table (.txt)
+          │                                  │
+   np.load(mmap_mode=r)              loadtxt[:, 2:-1]
+   never loaded whole                drop weight / lnp / chi2 cols
+          │                                  │
+          └────────────────┬─────────────────┘
+                           ▼
+                 seeded shuffle             randperm(n, gen)   (split_seed)
+                           ▼
+                 physical cut               phys_cut_idx: keep omega_b h^2 < cut
+                           ▼                 (omegab, H0 columns found by name)
+                 keep N_train               idx = phys[:n_keep  or  N // divisor]
+                           ▼
+            stage_source:  subset bytes < ram_frac · available RAM ?
+                 ┌─────────┴──────────┐
+                yes                    no
+                 ▼                     ▼
+       ┌────────────────────┐  ┌────────────────────┐
+       │ materialize the    │  │ keep the memmap    │
+       │ compact subset,    │  │ + global idx       │
+       │ reindex → arange   │  │ (stream from disk) │
+       └────────────────────┘  └────────────────────┘
+                 └─────────┬──────────┘
+                           ▼
+       source dict  { C, dv, idx  (+ C_mean, dv_mean — train only) }
+                    ──────────────────────────────────────────────▶  build_loaders
+```
+
+The local `arange` reindex is the trick: every consumer reads `C` / `dv` only
+through `idx`, so it does not matter whether `idx` points into the full memmap or
+the compact in-RAM subset — the pipeline is identical either way.
+
 **2. Whiten the inputs** (`geometries_parameter.py`). Raw cosmological parameters
 are correlated and span wildly different scales. `ParamGeometry` centers them,
 rotates into the parameter-covariance eigenbasis, and scales each direction to
 unit variance, so the network receives decorrelated, unit-variance inputs rather
 than strongly correlated physical numbers.
+
+```
+2.  Whiten the inputs                          ParamGeometry · geometries_parameter.py
+
+      raw params  θ                            (B, n_param)  physical, correlated
+          │
+          │  − center                          c = training mean
+          ▼
+      centered
+          │  @ evecs                           rotate into the param-covmat eigenbasis
+          ▼                                     evecs, √λ = eigh(covmat)   (from_covmat)
+      decorrelated
+          │  / √λ                              scale every axis to unit variance
+          ▼
+      whitened input  X  ────────────────────▶ model sees decorrelated, σ = 1 inputs
+
+      encode(θ) = (θ − c) @ evecs / √λ          decode = (X · √λ) @ evecsᵀ + c  (exact inverse)
+```
 
 **3. Whiten the output, and keep the metric** (`geometries_output.py`). The data
 vector is *masked* (the analysis keeps only some entries) and strongly
@@ -122,11 +177,66 @@ them in the data-covariance eigenbasis, so every network output is decorrelated
 and equally hard to fit. The same object holds `Cinv`, the masked inverse
 covariance the chi2 contracts against — geometry and metric live together.
 
+```
+3.  Whiten the output, keep the metric         DataVectorGeometry · geometries_output.py
+
+      raw data vector  d                        (B, total_size)  full 3x2pt
+          │
+          │  squeeze  d[:, dest_idx]            keep only the unmasked entries → (B, n_keep)
+          ▼
+          │  − center                           c = training mean of the kept entries
+          ▼
+          │  @ evecs / √λ                       whiten in the kept-block cov eigenbasis
+          ▼                                      evecs, √λ = eigh(kept cov)
+      whitened target  t  ◀──────────────────── network predicts  ŷ ≈ t
+                                                 decorrelated, σ = 1 → every output equally hard
+
+      ── the loss un-whitens, and scores the true metric ──────────────────────
+          ŷ − t  ──unwhiten──▶  r               r = physical residual  (· √λ) @ evecsᵀ
+                                    │
+                χ² = rᵀ · Cinv · r  ◀┘            full masked precision (geom.Cinv_sq)
+                                                 for full whitening this equals ‖ŷ − t‖²
+                                                 (the whitening basis is the χ² basis)
+```
+
 **4. Build the loss** (`loss_functions.py`). `make_chi2` wraps the output
 geometry in a chi2. Because the targets are whitened, plain squared error in the
 whitened space *is* the chi2, so the optimization is well-conditioned; the loss
 un-whitens the residual and contracts it with `Cinv` to report the true chi2, and
 adds optional robustness (trim the worst points, up-weight the still-hard ones).
+
+```
+4.  Build the loss                            make_chi2 · loss_functions.py
+
+      cosmolike cov / mask / inv-cov
+                │  DataVectorGeometry.from_cosmolike   (one cosmolike read + one eigh)
+                ▼
+         geom   (built once)        owns squeeze · center · whiten · decode · Cinv
+                │
+                │  wrap  (composition: the loss HAS-A geom — self.geom, not inheritance)
+                ▼
+       rescale = ?
+      ┌──────────────────┬─────────────────────────┬──────────────────────────┐
+    "none"            "rescaled" (A)             "residual" (B)
+      ▼                  ▼                          ▼
+┌──────────────┐  ┌────────────────────┐    ┌────────────────────┐
+│ CosmolikeChi2│  │ RescaledChi2       │    │ ResidualBaseChi2   │
+│ plain masked │  │ R divides ŷ →      │    │ R moves the        │
+│ Mahalanobis  │  │ diag(1/R) in grad  │    │ baseline; plain χ² │
+└──────────────┘  └────────────────────┘    └────────────────────┘
+ needs_params      needs_params = True          needs_params = True
+  unset → False    + build_shear_angle_map(geom) + configure_rescaling(...)
+                │
+                ▼
+        chi2fn  ─────────────────────────────────▶  run_emulator
+        forwards encode / decode / dest_idx / total_size → self.geom
+        pipeline branches on getattr(chi2fn, "needs_params", False)   (not isinstance)
+```
+
+The two ideas the diagram is built around: **composition** (one `geom` built once,
+wrapped by whichever loss — never re-read, never inherited) and the
+**`needs_params` capability flag** (a future param-aware loss just sets the flag;
+nothing branches on `isinstance`).
 
 **5. Choose the model** (`emulator_designs.py`). `ResMLP` is the baseline: an
 input projection, a stack of residual blocks, an output projection. `ResCNN` adds
@@ -139,6 +249,30 @@ memory, so the loaders pick a regime — hold the whole encoded set resident on 
 GPU if it fits, otherwise stream it from RAM, or from the disk memmap, a chunk at
 a time — and hand the training loop two closures (`load_C`, `load_dv`) that hide
 which regime is in play, so the loop code is identical no matter the data size.
+
+```
+6.  Feed the GPU                              _build_loaders_one · batching.py
+
+     one source's data vectors                budget = free VRAM (CUDA) | GPU_MEM (else)
+               │
+               │  encoded set fits?    enc_dvs + resident < 0.8 · budget
+       ┌───────┴───────────────────────────────────┐
+      yes                                           no
+       │                                    dv still an in-RAM array?
+       │                                ┌───────────┴───────────┐
+       │                               yes                      no (np.memmap)
+       ▼                                ▼                        ▼
+ ┌───────────────┐             ┌──────────────────┐    ┌──────────────────┐
+ │ Regime 1      │             │ Regime 2         │    │ Regime 3         │
+ │ resident GPU  │             │ RAM → GPU        │    │ disk → GPU       │
+ │ pre-encode    │             │ stream a chunk,  │    │ stream a chunk,  │
+ │ once; batch = │             │ encode on the fly│    │ encode on the fly│
+ │ on-GPU index  │             │ (pinned on CUDA) │    │ (memmap read)    │
+ └───────────────┘             └──────────────────┘    └──────────────────┘
+  no transfer or                re-stream the subset once per epoch, in VRAM-sized
+  re-encode, ever               chunks (load = bs · batches_per_load) — per chunk,
+                                not per minibatch
+```
 
 **7. Train** (`training.py`). `run_emulator` builds the model, optimizer, and
 scheduler from spec dicts, runs the per-epoch loop (annealed robustness, a
@@ -271,7 +405,53 @@ list is searched.
 
 ---
 
-## 7. Appendix: every file's functions
+## 7. Appendix: the chi2 metric (Mahalanobis)
+
+The loss and the reported metric are both a **chi2**, which is a squared
+**Mahalanobis distance** — the distance between two points measured *in units of
+the data's own spread and correlations*, not in raw coordinate units. For a
+residual `r = pred − truth`, the squared Mahalanobis distance is
+
+```
+   d²  =  rᵀ · C⁻¹ · r          C = data covariance,  C⁻¹ = precision (Cinv)
+```
+
+and that *is* the chi2. The contrast with plain distance is the whole point:
+
+| | formula | what it does |
+|---|---|---|
+| plain Euclidean | `rᵀ r = Σ rᵢ²` | every entry counts equally |
+| **Mahalanobis** | `rᵀ C⁻¹ r` | divide each direction by its variance, remove correlations → "how many **σ** off", not "how many raw units off" |
+
+Two limits make it concrete:
+
+- **Diagonal `C`** (variances σᵢ², no correlations): `d² = Σ (rᵢ / σᵢ)²` — just
+  z-scores squared. A 1-unit error on a tight bin (small σ) costs far more than on
+  a loose bin.
+- **`C = I`**: collapses back to plain Euclidean.
+
+The tie to this codebase: **whitening is exactly the coordinate change that turns
+Mahalanobis into Euclidean.** In the whitened basis the covariance becomes the
+identity, so
+
+```
+   rᵀ · C⁻¹ · r   =   ‖ whiten(r) ‖²
+```
+
+That is the "whiten the output, keep the metric" line from step 3: the network
+trains on a clean `‖·‖²` in the whitened basis, while the loss still scores the
+true correlated metric — it un-whitens the residual and contracts the masked
+`Cinv`. For the standard full whitening the two are equal to rounding; the
+diagonal-whitening variant (`DiagonalGeometry`, used for the CNN) breaks that
+equality, which is why the loss always keeps the explicit `Cinv` contraction
+rather than collapsing to a mean squared error.
+
+**Mnemonic:** Mahalanobis = Euclidean distance *after whitening* (distance in σ
+units, with correlations removed).
+
+---
+
+## 8. Appendix: every file's functions
 
 One line per function / class / method. For full detail, read the docstring in
 the file itself; this is the index.
@@ -357,7 +537,7 @@ The full networks.
 chi2 losses; each holds a geometry (composition).
 
 - `anneal_value(epoch, opts)` — the per-epoch trim / focus schedule.
-- `CosmolikeChi2` — the plain chi2: `chi2` (Mahalanobis distance), `loss` (trim / focus / sqrt transform), and thin delegation to the held geometry.
+- `CosmolikeChi2` — the plain chi2: `chi2` ([Mahalanobis](#7-appendix-the-chi2-metric-mahalanobis) distance), `loss` (trim / focus / sqrt transform), and thin delegation to the held geometry.
 - `RescaledChi2` — analytic-R "A" form (R divides the net output); `configure_rescaling`, `_R`, `encode` / `decode` / `chi2` / `loss`.
 - `ResidualBaseChi2` — analytic-R "B" form (R moves only the baseline; the chi2 stays plain).
 - `ElementWeightedChi2` — a per-element focal weight in the training loss (`set_elem_weight`).
