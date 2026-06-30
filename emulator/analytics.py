@@ -28,7 +28,7 @@ def _analytic_R(theta_arcmin, z_eff, cosmo, cosmo_mid,
 
   One formula, two array libraries: numpy (the analysis /
   plotting wrappers) or torch (the training loop, on-device from
-  the resident params); the body is shared arithmetic, only log
+  the resident params). The body is shared arithmetic; only log
   and the coercion differ. The numpy path is bit-identical to
   the original.
 
@@ -67,8 +67,8 @@ def _analytic_R(theta_arcmin, z_eff, cosmo, cosmo_mid,
     log    = torch.log
     coerce = lambda a: torch.as_tensor(
       a, dtype=cosmo.dtype, device=cosmo.device)
-    # a lone 1D row -> (1, n_param): the tensor analogue of
-    # np.atleast_2d, so the [:, col] indexing below works.
+    # a lone 1D row -> (1, n_param): the tensor np.atleast_2d, so
+    # the [:, col] indexing below works.
     if cosmo.ndim == 1:
       cosmo = cosmo[None, :]
   else:
@@ -102,7 +102,7 @@ def _analytic_R(theta_arcmin, z_eff, cosmo, cosmo_mid,
   # flat[None, :] -> (1, n_elem); Gam[:, None] -> (N, 1). Dividing
   # broadcasts to the full (N, n_elem) grid -- every cosmology's
   # Gamma against every element's base wavenumber. ([None, :] and
-  # [:, None] are the numpy/torch spelling of tensor.unsqueeze.)
+  # [:, None] are the numpy/torch spelling of unsqueeze.)
   q     = flat[None, :] / Gam[:, None]       # (N, n_elem)
   q_mid = flat[None, :] / Gam_m              # (1, n_elem)
 
