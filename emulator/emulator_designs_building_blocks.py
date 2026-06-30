@@ -17,11 +17,33 @@ from .activations import activation_fcn
 
 
 class Affine(nn.Module):
+    """
+    A learnable scalar scale and shift: out = x * gain + bias.
+
+    gain and bias are single scalars (shape (1,)), broadcast over
+    every element of x, so Affine applies one global scale and one
+    global shift to the whole tensor, not a per-feature transform.
+    gain initializes to 1 and bias to 0, so at init it is the
+    identity (a no-op that learns a scale / offset from there).
+    Used as the ResBlock default "norm" factory and as the final
+    layer of ResMLP / ResCNN.
+
+    gain and bias are nn.Parameter, so they are registered with the
+    module and trained by the optimizer. Weight decay is kept off
+    both (make_optimizer decays only ndim >= 2 weight matrices):
+    gain inits to 1, and decaying it toward 0 would attenuate the
+    signal, while decaying a bias has no principled meaning.
+    """
     def __init__(self):
         super(Affine, self).__init__()
+        # one learnable scale (gain, init 1) and one learnable
+        # shift (bias, init 0), each a single scalar broadcast
+        # over all elements of the input.
         self.gain = nn.Parameter(torch.ones(1))
         self.bias = nn.Parameter(torch.zeros(1))
     def forward(self, x):
+        # elementwise: every entry of x is scaled by gain and
+        # shifted by bias (both broadcast from their size-1 shape).
         return x * self.gain + self.bias
 
 
@@ -108,8 +130,12 @@ class CNNBlock(nn.Module):
                   them back to one channel. The mid-activation
                   is essential, or the two convs collapse into
                   one kernel and the extra filters do nothing.
-    act         = activation factory, invoked as act(dim); used
-                  for the mid-activation and the output one.
+    act         = activation factory, invoked as act(dim) to build
+                  each nonlinearity (the mid-activation and the
+                  output one). Defaults to activation_fcn, the same
+                  learnable H that ResBlock / ResMLP use, so by
+                  default the CNN head and the trunk share one
+                  activation family.
   """
   def __init__(self, dim, kernel_size=11, channels=1,
                act=activation_fcn):
@@ -125,11 +151,14 @@ class CNNBlock(nn.Module):
                           kernel_size=kernel_size,
                           padding=pad)
 
-    # nonlinearity between the expand and the collapse. Without
-    # it, conv (1->channels) and collapse (channels->1) are two
-    # stacked linear convs that fold into a single 1->1 kernel,
-    # so the extra filters would be wasted. Identity when
-    # channels == 1 (no expand to make nonlinear).
+    # nonlinearity between the expand and the collapse. It is
+    # act(dim): the same activation_fcn (the paper's H) the
+    # ResBlocks use by default, a learnable activation class, not a
+    # bare ReLU. It must be here because without a nonlinearity the
+    # conv (1->channels) and collapse (channels->1) are two stacked
+    # linear convs that fold into a single 1->1 kernel, so the
+    # extra filters would be wasted. Identity when channels == 1
+    # (no expand to make nonlinear).
     self.act_mid = act(dim) if channels > 1 else nn.Identity()
 
     # mix the filters back to one channel (a 1x1 conv is a

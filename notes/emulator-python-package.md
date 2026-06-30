@@ -100,6 +100,49 @@ turns each range into an Optuna suggestion named by its dotted path
 search_defaults(ta) gives {path: default} to enqueue trial 0 (warm start). Casts
 min/max to float so a YAML 1e-5 that PyYAML parsed as a string still works.
 
+## EmulatorExperiment: the setup-object (ADDED 2026-06-30)
+
+`emulator/experiment.py` holds **class EmulatorExperiment**, which factors the
+WHOLE driver setup (config parse + model resolution + device + data staging +
+geometry + chi2 + spec assembly + train) so the drivers and sweep scripts do not
+copy it. Classmethods `from_yaml(path)` / `from_config(cfg)` (the dict path) both
+resolve the model class from `train_args.model.name` through `MODELS = {"resmlp":
+ResMLP, "rescnn": ResCNN}` (lives here, shared); the instance also keeps
+`raw_train_args` (the UN-collapsed train_args, so a tuner suggests ranges per
+trial). Composable methods: `stage_train(n_train=)` / `stage_val(n_val=)` (each a
+FRESH gen seeded from split_seed, so N_train subsets are NESTED -- train set
+identical to the old driver, only val rows shift), `build_geometry()`,
+`build_specs()` (build_run_specs + activation inject + ResCNN geom inject),
+`train(train_args=, silent=)`, `run()` (the full pipeline), `frac_above(thr)`
+(the sweep metric, via eval_source_chi2), `pool_size()` (physical-cut row count =
+the sweep's top N). The fixed single-emulator choices (probe=xi, AdamW,
+ReduceLROnPlateau, use_amp=False, DEFAULT_THRESHOLDS, the registry) are
+constructor DEFAULTS. BOTH train + tune drivers are refactored onto it (no setup
+duplication; the tune loop is just `exp.train(train_args=suggest_train_args(trial,
+exp.raw_train_args), silent=True)`).
+
+## Driver family (renamed 2026-06-30; model chosen in the YAML)
+
+The drivers DROPPED "resmlp" from their names: the model is the YAML's choice via
+`train_args.model.name` (resmlp | rescnn) + the MODELS registry; ResCNN
+additionally needs `geom` injected (build_specs / the drivers do it for it), and
+on CUDA may need `compile_mode: default` in the model block.
+- `train_single_emulator_cosmic_shear.{py,yaml}` -- one run.
+- `tune_single_emulator_cosmic_shear.{py,yaml}` -- Optuna study.
+- `sweep_ntrain_emulator_cosmic_shear.py` -- f(dchi2>thr) vs N_train for ONE
+  config (run once per architecture / rescale, overlay the saved curves).
+- `bakeoff_activation_emulator_cosmic_shear.py` -- activation x N_train DOUBLE
+  loop, one curve per activation; N is the OUTER loop so the geometry is built
+  once per N and shared across the inner activation loop.
+
+Sweep output is PLAIN TEXT (np.loadtxt columns + a "#" metadata header), NOT json
+-- the user prefers text matching the .txt / .covmat workflow. Helper
+`save_learning_curves` in **emulator/results.py**; `plot_learning_curves`
+(multi-curve overlay, {label: {N:frac}} or {label:(sizes,fracs)}) in plotting.py.
+`load_source` gained `n_keep` (an ABSOLUTE row count; pass exactly one of
+divisor / n_keep) so a sweep hits exact sizes from the deterministic nested pool.
+`make_logger` (the --quiet print-gate factory) lives in training.py.
+
 ## NEXT
 
 More drivers/variants (ResCNN, IA/TATT once the high-T TATT dataset exists,

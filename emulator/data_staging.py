@@ -11,9 +11,12 @@ reads the parameter names off a covmat header. load_source is the
 orchestrator: it memmaps, cuts, sizes, and stages one source into a
 {C, dv, idx, (+ means)} dict.
 
-PS: a memmap (memory-mapped array) is a NumPy array backed by the file on
-disk and read in slices, so an array larger than RAM is never loaded
-whole.
+PS: a dump is the full on-disk array written out by the data-generation
+run, every simulated cosmology stored as one row (the data-vector dump is
+the .npy file, the parameter dump the .txt); a training run draws its
+N_train subset of rows from it. a memmap (memory-mapped array) is a NumPy
+array backed by the file on disk and read in slices, so an array larger
+than RAM is never loaded whole.
 """
 
 import os
@@ -50,11 +53,16 @@ def stream_chunks(idx, chunk):
 
 def stream_stats(mm, idx, method=1, CHUNK=10000):
   """
-  Per-column normalization stats over selected rows.
+  Per-column normalization stats over a chosen subset of rows.
 
-  Streams the chosen rows CHUNK at a time and accumulates
-  the statistics, so `mm` (which may be a memmap larger than
-  RAM) is never fully loaded. `method` picks the scheme:
+  Context: the full training set is a big dump of data vectors,
+  one row per cosmology, and a run uses only N_train of them, a
+  subset of that dump. `mm` is a row-indexable view of those data
+  vectors (the on-disk dump, possibly a memmap larger than RAM, or
+  its staged in-RAM subset), and `idx` names which of its rows this
+  run actually uses. The statistics are accumulated over just those
+  rows, streamed CHUNK at a time, so `mm` is never fully loaded.
+  `method` picks the scheme:
     1 = z-score  -> returns (mean, std)
     2 = min-max  -> returns (min,  max - min)
   The caller then normalizes a row as (x - offset) / scale.
@@ -62,7 +70,8 @@ def stream_stats(mm, idx, method=1, CHUNK=10000):
   Arguments:
     mm     = 2D array indexable by row (in-RAM or memmap);
              columns are the quantities to summarize.
-    idx    = row indices to include in the statistics.
+    idx    = the rows of `mm` to include in the statistics (the
+             N_train subset of the dump this run uses).
     method = 1 for z-score, 2 for min-max.
     CHUNK  = rows read per streamed block.
 
@@ -128,23 +137,26 @@ def param_stats(arr, idx, method=1):
 
 def stage_source(C, dv, idx, ram_frac=0.7):
   """
-  Stage a source's used rows in RAM if they fit, else leave
-  them on disk.
+  Stage a source's used rows (the N_train subset of the dump)
+  in RAM if they fit, else leave them on disk.
 
-  The full dv dump may be a memmap too big for RAM, but the
-  used subset (idx -- e.g. a 1/10 training cut) is far smaller
-  and usually fits. If the subset's bytes are below ram_frac
-  of the available RAM, materialize the compact subset (C and
-  dv restricted to the used rows, held in RAM) and reindex
-  locally; otherwise return the inputs unchanged so the
-  loaders stream dv from the memmap by global index. Either
-  way idx matches its own C/dv, so the rest of the pipeline is
-  identical.
+  The training set is a big dump of data vectors on disk, one
+  row per cosmology; a run uses only N_train of them, the
+  subset named by `idx` (e.g. a 1/10 training cut). That used
+  subset is far smaller than the full dump and usually fits in
+  RAM even when the dump itself does not. If the subset's bytes
+  are below ram_frac of the available RAM, materialize the
+  compact subset (C and dv restricted to the used rows, held in
+  RAM) and reindex locally; otherwise return the inputs
+  unchanged so the loaders stream dv from the memmap by global
+  index. Either way idx matches its own C/dv, so the rest of the
+  pipeline is identical.
 
   Arguments:
     C        = full parameter dump, (N, Ncosmo).
     dv       = full dv dump, (N, Ndv); ndarray or np.memmap.
-    idx      = global row indices to use.
+    idx      = the rows of the dump this run uses, as global
+               row indices (the N_train subset).
     ram_frac = fraction of available RAM the materialized
                subset may occupy (default 0.7).
 

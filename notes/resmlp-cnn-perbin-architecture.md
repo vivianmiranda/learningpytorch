@@ -1,6 +1,6 @@
 ---
 name: resmlp-cnn-perbin-architecture
-description: "ResMLP + 1D-CNN correction head for the cosmic-shear emulator, grounded in the user's PUBLISHED CMB design (ResMLP -> embedding -> 1D CNN/TRF -> output). CORRECTED 2026-06-25b: the clean GLOBAL ResCNN is NEUTRAL at T=16 (f(dchi2>0.2) ~= 0.20 == plain ResMLP, gate near init); the earlier '0.24->0.18 worked' was CONFOUNDED (it changed full->diagonal whitening AND used a broken mid-nonlinearity-less CNNBlock). Final architecture = APPENDIX ResCNN: pure-ResMLP trunk in FULL whitening + a GATED conv correction that converts to theta order internally via fixed buffers W_fd/W_df (CUDA-graph-safe; live geometry calls + reduce-overhead crash); fixed CNNBlock has act_mid; needs compile_mode='default' (reduce-overhead trips CUDA-graph-trees on the skip-add). LEADING READ: the T=16 toy is too easy/narrow to exhibit the theta-structured residual a conv fixes; the CNN's value is at HIGH training temperature (real target T=512), per the paper -- test by swapping a hotter training file. Classes: DiagonalGeometry, CNNBlock, ResCNN(appendix), GroupedCNNBlock, ResCNNPerBin. Gotchas: conv-collapse-without-mid-nonlinearity; geometry-call-in-forward breaks CUDA graphs (use buffers); reduce-overhead fragile."
+description: "ResMLP + 1D-CNN correction head for the cosmic-shear emulator, grounded in the user's PUBLISHED CMB design (ResMLP -> embedding -> 1D CNN/TRF -> output). CORRECTED 2026-06-25b: the clean GLOBAL ResCNN is NEUTRAL at T=16 (f(dchi2>0.2) ~= 0.20 == plain ResMLP, gate near init); the earlier '0.24->0.18 worked' was CONFOUNDED (it changed full->diagonal whitening AND used a broken mid-nonlinearity-less CNNBlock). Final architecture = APPENDIX ResCNN: pure-ResMLP trunk in FULL whitening + a GATED conv correction that converts to theta order internally via fixed buffers W_fd/W_df (CUDA-graph-safe; live geometry calls + reduce-overhead crash); fixed CNNBlock has act_mid; needs compile_mode='default' (reduce-overhead trips CUDA-graph-trees on the skip-add). LEADING READ: the T=16 toy is too easy/narrow to exhibit the theta-structured residual a conv fixes; the CNN's value is at HIGH training temperature (real target T=512), per the paper -- test by swapping a hotter training file. Classes: DiagonalGeometry, CNNBlock, ResCNN(appendix), GroupedCNNBlock, ResCNNPerBin. Gotchas: conv-collapse-without-mid-nonlinearity; geometry-call-in-forward breaks CUDA graphs (use buffers); reduce-overhead fragile. PORT FIX 2026-06-30: ResCNN threads --activation into the CNN head (block_opts['act'], fallback activation_fcn); was silently H regardless of the trunk."
 metadata:
   node_type: memory
   type: project
@@ -92,6 +92,19 @@ throughout -- only the MODEL and the GEOMETRY change):**
   the win is a CNN curve sustaining its descent where ResMLP flattens (the CMB
   TRF-vs-ResMLP divergence); rescnn_pb minus rescnn = the cost of the global conv's
   boundary smoothing.
+
+**PACKAGE PORT FIX (2026-06-30): ResCNN threads the run's activation into the CNN
+head.** In the ported emulator/ package, EmulatorExperiment injects the
+--activation choice (make_activation) into model_opts["block_opts"]["act"], which
+flowed to the trunk ResBlocks but NOT to CNNBlock: ResCNN built the head with
+CNNBlock's default act=activation_fcn (the paper's H). So a non-default
+--activation (power / multigate / gated_power) applied to the TRUNK only, while
+the conv head (act_mid + the output act) silently stayed on H. Fixed:
+ResCNN.__init__ now passes act=block_opts.get("act", activation_fcn) to each
+CNNBlock, so head and trunk share one activation family; default H is unchanged.
+Any earlier rescnn run with a non-H activation had an H head, so re-run if that
+mattered. All four make_activation factories take a single size arg, which is
+exactly what CNNBlock calls (act(dim)).
 
 **The architecture (shared trunk, per-bin CNN head):**
 1. **Shared ResMLP trunk**: params -> latent (e.g. 512). KEEPS the cosmology-map

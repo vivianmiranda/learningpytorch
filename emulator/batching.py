@@ -10,12 +10,18 @@ RAM, or stream it from a disk memmap) and reports the bytes it made
 resident. build_loaders runs it once per source (train, then val against
 the reduced budget) and returns the data dict the loop consumes.
 
-PS: whitened = rotated into the covariance eigenbasis and scaled to unit
-variance, so the components are decorrelated (the form the network sees).
-encoded = a data vector put through the geometry's encode (keep the
-unmasked entries, subtract the training mean, whiten), the form trained
-against. resident = held in GPU memory for the whole run, not re-loaded
-each batch.
+PS: a loader is a closure load(rows) -> tensor that maps a set of global
+row indices to a ready-to-train batch already on the compute device. It
+hides where the data physically lives (resident on the GPU, streamed from
+RAM, or read from a disk memmap), so the training loop simply asks for the
+rows it wants and gets device tensors back, the same way in every regime.
+This module builds two loaders per source: load_C for the whitened
+parameter inputs and load_dv for the encoded targets. whitened = rotated
+into the covariance eigenbasis and scaled to unit variance, so the
+components are decorrelated (the form the network sees). encoded = a data
+vector put through the geometry's encode (keep the unmasked entries,
+subtract the training mean, whiten), the form trained against. resident =
+held in GPU memory for the whole run, not re-loaded each batch.
 """
 
 import numpy as np
@@ -60,7 +66,11 @@ def compute_batch_size_bytes(model, bs, sample_dims, dv_len=3000):
   # memory): pack transforms each tensor on the way in
   # (e.g. compress), unpack reverses it on the way out.
   # The pair must round-trip: unpack(pack(t)) == t. Here
-  # the no-op pair just spies on the sizes.
+  # the no-op pair just spies on the sizes. See the PyTorch
+  # tutorial on saved-tensor hooks (URL split across two
+  # lines to fit the width; rejoin with no space between):
+  #   https://docs.pytorch.org/tutorials/intermediate/
+  #   autograd_saved_tensors_hooks_tutorial.html
   hooks = torch.autograd.graph.saved_tensors_hooks  # alias
   with hooks(pack, unpack):
     # saving happens during forward, so the instant
@@ -240,12 +250,20 @@ def _build_loaders_one(device, C, dv, idx,
   resident    = (model_bytes + cinv + enc_params)
 
   def slots(rows):
-    # map GLOBAL row numbers to their LOCAL positions in the
-    # compact resident subset. used_rows is sorted and every
-    # query row is one of its entries, so np.searchsorted (which
-    # returns the insertion index into a sorted array) gives, for
-    # each global row, exactly where it sits in used_rows -- i.e.
-    # its row index in C_used / dv_used.
+    # Translate GLOBAL row numbers into LOCAL positions in the
+    # compact resident subset. The whole training pool is a big
+    # dump of data vectors on disk, one row per cosmology, and this
+    # run trains on only N_train of them: a subset of that dump.
+    # The loaders staged just those used rows into C_used / dv_used,
+    # packed together in sorted order, so a row's position in the
+    # full dump (its GLOBAL index) is a different number from its
+    # position in the resident subset (its LOCAL index). used_rows
+    # is the sorted list of the global indices we kept, so a global
+    # row's LOCAL index is simply where it sits inside used_rows.
+    # np.searchsorted returns the insertion index of each query into
+    # a sorted array; since every query row is itself one of
+    # used_rows' entries, that insertion index is exactly its row
+    # index in C_used / dv_used.
     local_pos = np.searchsorted(used_rows, rows)
     return torch.from_numpy(local_pos).to(device)
 

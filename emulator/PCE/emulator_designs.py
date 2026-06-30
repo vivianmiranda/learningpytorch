@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 
 
-def _pce_deg_tuples(m=m, pq=pq, q=q):
+def _pce_deg_tuples(m, pq, q):
   """Degree tuples (len m, each >=1) with sum a_i^q <= pq.
 
   Recursive enumeration with q-norm pruning: extend the

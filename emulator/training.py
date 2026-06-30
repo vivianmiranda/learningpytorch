@@ -10,6 +10,16 @@ training_loop_batched is the per-epoch loop (trim / focus annealing and
 best-epoch tracking), and run_emulator is the top-level orchestrator that
 builds everything, then trains, returning the model and the per-epoch
 histories.
+
+PS: a loader is a closure load(rows) -> tensor that maps global row
+indices to a ready-to-train batch already on the compute device, hiding
+where the data lives (resident on the GPU, streamed from RAM, or read from
+a disk memmap). build_loaders (batching.py) makes one loader for the
+whitened parameters (load_C) and one for the encoded targets (load_dv) per
+source; the loop here just asks for the rows it wants. whitened = rotated
+into a covariance eigenbasis and scaled to unit variance, so the
+components are decorrelated (the form the model sees, both input and
+target).
 """
 
 import numpy as np

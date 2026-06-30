@@ -18,6 +18,7 @@ geometry classes (geometries_parameter / geometries_output) do it.
 import torch
 import torch.nn as nn
 
+from .activations import activation_fcn
 from .emulator_designs_building_blocks import (
   Affine, ResBlock, CNNBlock)
 
@@ -90,21 +91,37 @@ class ResCNN(nn.Module):
   well-conditioned chi2 = ||pred - target||^2 (identity Hessian).
 
   The CNN is an additive correction in the DIAGONAL view of the
-  geometry (theta order, per-element /sigma): forward maps the
-  ResMLP output into that view so a 1D conv sees the real theta
-  axis, the conv corrects it there, then forward maps the
-  correction back to the full basis and adds it through a
-  learnable gate. So the bulk map keeps the eigenbasis
-  conditioning (the ResMLP is permutation invariant -- it does
-  not need theta order) and only the small correction pays the
-  theta-order conditioning cost.
+  geometry (theta order, per-element /sigma). A 1D conv slides one
+  shared kernel along the length axis to exploit adjacency: it
+  learns how each entry relates to its neighbours, which only
+  helps if neighbouring entries are neighbouring theta. The
+  full-whitened basis rotates into the covariance eigenbasis, so
+  each component is a mix of all thetas and the angular order is
+  scrambled; a conv there would slide over arbitrary eigenmodes
+  with no locality to exploit. The diagonal view keeps theta order
+  (a per-element /sigma scaling, no rotation), so the conv sees
+  the real angular axis and can correct theta-local structure (the
+  smooth shape and oscillations of xi across neighbouring angular
+  bins, which the trunk leaves as correlated residuals along
+  theta). forward maps the ResMLP output into that view, the conv
+  corrects it there, then forward maps the correction back to the
+  full basis and adds it through a learnable gate. So the bulk map
+  keeps the eigenbasis conditioning (the ResMLP is permutation
+  invariant, it does not need theta order) and only the small
+  correction pays the theta-order conditioning cost.
 
   The two basis-change maps are precomputed from the geometry
-  and stored as fixed BUFFERS (W_fd full->diagonal, W_df its
-  inverse). Buffers -- not live geometry calls in forward -- are
-  what makes this safe under torch.compile reduce-overhead /
-  CUDA graphs: a tensor lazily built inside forward gets captured
-  in the graph's static pool and overwritten on the next run.
+  and stored as fixed BUFFERS. Their names abbreviate the two
+  bases they convert between: f = the full-whitened basis (the
+  covariance eigenbasis the trunk predicts in), d = the diagonal
+  basis (theta order, each element scaled by its own marginal
+  sigma, the DiagonalGeometry view a conv needs). The subscripts
+  read in multiply order, so y_full @ W_fd goes f -> d, and the
+  correction @ W_df goes d -> f (W_df is W_fd's inverse). Storing
+  them as buffers, not live geometry calls in forward, is what
+  makes this safe under torch.compile reduce-overhead / CUDA
+  graphs: a tensor lazily built inside forward gets captured in
+  the graph's static pool and overwritten on the next run.
 
   Target and loss use the FULL-whitening DataVectorGeometry,
   exactly as the standalone ResMLP, so swapping ResMLP -> ResCNN
@@ -126,7 +143,11 @@ class ResCNN(nn.Module):
                    model starts close to the pure ResMLP; not 0
                    -- a 0 gate strands the CNN with no gradient,
                    so it would never learn.
-    block_opts   = ResBlock options (None -> {}).
+    block_opts   = ResBlock options (None -> {}); its "act" (the
+                   chosen activation) is also handed to the CNN
+                   head, so the head and trunk share one activation
+                   family. Defaults to activation_fcn (the paper's
+                   H) when block_opts sets no "act".
   """
   def __init__(self, input_dim, output_dim, int_dim_res, geom,
                kernel_size=11, channels=16, n_blocks=3,
@@ -144,18 +165,29 @@ class ResCNN(nn.Module):
     mlp.append(Affine())
     self.mlp = nn.Sequential(*mlp)
 
-    # CNN appendix: axis-aware blocks acting in theta order.
+    # CNN appendix: axis-aware blocks acting in theta order. Give
+    # the CNN head the same activation as the trunk's ResBlocks:
+    # block_opts["act"] carries the run's chosen activation (the
+    # --activation flag, injected by EmulatorExperiment), falling
+    # back to activation_fcn (the paper's H, the ResBlock default)
+    # when block_opts sets none. Without this, a non-default
+    # activation would reach the trunk only and the head would
+    # silently stay on H.
+    cnn_act = block_opts.get("act", activation_fcn)
     self.cnn = nn.ModuleList([
       CNNBlock(output_dim, kernel_size=kernel_size,
-               channels=channels)
+               channels=channels, act=cnn_act)
       for _ in range(n_blocks_cnn)])
 
     # learnable scalar gate on the correction (small init, not 0).
     self.gate = nn.Parameter(torch.tensor(float(gate_init)))
 
     # Frozen basis-change maps as buffers (move with .to(device),
-    # not trained). sigma = DiagonalGeometry per-element scale
-    # sqrt(diag cov); evecs/sqrt_ev give the full basis.
+    # not trained). Naming: f = full-whitened basis (cov
+    # eigenbasis), d = diagonal basis (theta order, /sigma). The
+    # subscripts read in multiply order, so x @ W_fd maps f -> d
+    # and x @ W_df maps d -> f. sigma = DiagonalGeometry per-element
+    # scale sqrt(diag cov); evecs/sqrt_ev give the full basis.
     #   full-whitened y -> physical -> theta order (/sigma):
     #     W_fd = diag(sqrt_ev) evecs.T diag(1/sigma)
     #   theta-order correction -> physical -> full-whitened:
@@ -171,9 +203,11 @@ class ResCNN(nn.Module):
   def forward(self, x):
     # ResMLP prediction in the full-whitened basis (the bulk map).
     y = self.mlp(x)                   # (B, out_dim)
-    # -> theta-ordered (diagonal) view so the conv sees the axis.
+    # full-whitened trunk output -> theta-ordered (diagonal) view
+    # so the conv sees the angular axis (f -> d, via W_fd).
     h = y @ self.W_fd
     for blk in self.cnn:
       h = blk(h)                      # axis-aware correction
-    # correction back to the full-whitened basis, gated, added.
+    # correction back to the full-whitened basis (d -> f, via
+    # W_df), gated, and added to the trunk output.
     return y + self.gate * (h @ self.W_df)
