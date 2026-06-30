@@ -12,17 +12,17 @@ class ParallelResMLP(nn.Module):
   """
   Per-bin emulator, batched: G = len(geom.bin_sizes) independent
   ResMLP heads (one per (xi+/-, source pair) bin) computed in
-  PARALLEL via grouped layers. Every head sees the full input
-  and predicts its bin; the heads are stacked on a group axis so
-  all G run in one batched matmul instead of a Python loop.
+  parallel via grouped layers. Every head sees the full input and
+  predicts its bin; the heads are stacked on a group axis so all G
+  run in one batched matmul instead of a Python loop.
 
-  Output widths differ per bin, so every head is built to the
-  PADDED width max(bin_sizes); after the forward we slice each
-  head's real bin_size and concat. The slice/concat is pure
-  memory movement (no matmul), so it costs nothing.
+  Output widths differ per bin, so every head is built to the padded
+  width max(bin_sizes); the forward slices each head's real bin_size
+  and concats. The slice/concat is pure memory movement (no matmul),
+  costing nothing.
 
-  Same parameters and math as the loop version -- just laid out
-  so the GPU does the heads simultaneously.
+  Same parameters and math as the loop version, laid out so the GPU
+  does the heads simultaneously.
 
   Arguments:
     input_dim   = number of model inputs.
@@ -48,50 +48,51 @@ class ParallelResMLP(nn.Module):
     G = self.n_heads
     n_layers = block_opts.get("n_layers", 2)
 
-    # input projection: input_dim -> int_dim_res, for all heads.
+    # input projection: input_dim -> int_dim_res, all heads.
     self.in_proj  = GroupedLinear(G, input_dim, int_dim_res)
-    # the residual trunk (identical-shape across heads).
-    self.blocks   = nn.ModuleList([
-      GroupedResBlock(G, int_dim_res, n_layers=n_layers)
-      for _ in range(n_blocks)])
-    # output projection to the PADDED width, then a final affine.
+    # the residual trunk (identical shape across heads).
+    blocks = []
+    for _ in range(n_blocks):
+      blocks.append(GroupedResBlock(G, int_dim_res, n_layers=n_layers))
+    self.blocks = nn.ModuleList(blocks)
+    # output projection to the padded width, then a final affine.
     self.out_proj = GroupedLinear(G, int_dim_res, self.max_bin)
     self.out_aff  = GroupedAffine(G)
 
   def forward(self, x):                 # x: (B, input_dim)
     G = self.n_heads
-    # Broadcast the SAME input to all G heads. unsqueeze(0)
-    # inserts a new size-1 axis at the front: (B, in) ->
-    # (1, B, in). expand(G, -1, -1) then stretches that size-1
-    # axis to length G (each -1 means "leave this axis as it
-    # is") -> (G, B, in). expand is a VIEW (stride 0 on the new
-    # axis), so the input is NOT copied G times; the einsum in
-    # GroupedLinear handles the broadcast.
+    # Broadcast the same input to all G heads. unsqueeze(0) inserts
+    # a size-1 axis: (B, in) -> (1, B, in); expand(G, -1, -1)
+    # stretches it to length G (each -1 leaves an axis as is) ->
+    # (G, B, in). expand is a view (stride 0 on the new axis), so the
+    # input is not copied G times; GroupedLinear's einsum broadcasts.
     h = x.unsqueeze(0).expand(G, -1, -1)
     h = self.in_proj(h)                 # (G, B, D)
     for blk in self.blocks:
       h = blk(h)                        # (G, B, D)
     h = self.out_aff(self.out_proj(h))  # (G, B, max_bin)
-    # Each head only "owns" its first sizes[g] outputs (the rest
-    # are padding). Slice those and concat in head order
-    # (= bin order = dest_idx order) -> (B, n_keep). This is the
-    # only per-head loop, and it's just slicing -- no matmul.
-    return torch.cat(
-      [h[g, :, :self.sizes[g]] for g in range(G)], dim=-1)
+    # Each head owns its first sizes[g] outputs (the rest padding).
+    # Slice those and concat in head order (= bin = dest_idx order)
+    # -> (B, n_keep). The only per-head loop, just slicing -- no
+    # matmul.
+    slices = []
+    for g in range(G):
+      slices.append(h[g, :, :self.sizes[g]])
+    return torch.cat(slices, dim=-1)
 
 
 class ParallelResCNN(nn.Module):
   """
-  ResMLP trunk + a PER-BIN 1D-CNN correction head: like ResCNN, but
-  the convolution is grouped so each tomographic bin is refined
+  ResMLP trunk + a per-bin 1D-CNN correction head: like ResCNN, but
+  the conv is grouped so each tomographic bin is refined
   independently (no smoothing across the bin-boundary jumps).
 
-  The CNN works on a PADDED per-bin layout -- n_bins segments of
-  length max_bin (the largest bin's kept count) -- so the grouped
-  conv has a uniform per-group length. The padding (max_bin minus
-  each real bin size) is absorbed by the surrounding linears; the
-  final Linear maps the padded n_bins*max_bin representation to the
-  real data-vector length.
+  The CNN works on a padded per-bin layout -- n_bins segments of
+  length max_bin (the largest bin's kept count) -- giving the
+  grouped conv a uniform per-group length. The padding (max_bin
+  minus each real bin size) is absorbed by the surrounding linears;
+  the final Linear maps the padded n_bins*max_bin representation to
+  the real data-vector length.
 
   Needs geom.bin_sizes (run build_shear_angle_map(geom) first) and
   a DiagonalGeometry (theta order kept within each bin).

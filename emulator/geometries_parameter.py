@@ -1,13 +1,13 @@
 """Input (parameter) whitening geometries.
 
-This module is the input side of the network: it maps raw cosmological
-parameters to the decorrelated, unit-variance vector the model consumes
-(encode) and back (decode). ParamGeometry is the base: it centers,
-rotates into the covmat eigenbasis, and unit-scales. LogParamGeometry
-whitens in log space for the multiplicative parameters, while
-NLAInputGeometry and AmplitudeFactorGeometry whiten every parameter
-except the intrinsic-alignment amplitude(s), which they append raw so the
-loss can apply them in closed form (the factored-IA emulator).
+The input side of the network: maps raw cosmological parameters to the
+decorrelated, unit-variance vector the model consumes (encode) and back
+(decode). ParamGeometry is the base: center, rotate into the covmat
+eigenbasis, unit-scale. LogParamGeometry whitens in log space for the
+multiplicative parameters; NLAInputGeometry and AmplitudeFactorGeometry
+whiten every parameter except the intrinsic-alignment amplitude(s), which
+they append raw so the loss can apply them in closed form (the factored-IA
+emulator).
 
 PS: to whiten is to rotate into the covariance eigenbasis and scale each
 direction to unit variance, so correlated quantities become decorrelated
@@ -23,14 +23,11 @@ class ParamGeometry:
   """
   Whitening transform for the cosmological parameters.
 
-  To "whiten" is to rotate into the covariance eigenbasis
-  and scale each direction to unit variance, so correlated
-  quantities become decorrelated and equally scaled. This
-  class applies that transform to the input parameters, so
-  the emulator sees decorrelated, unit-variance inputs
-  instead of strongly-correlated physical parameters. Build
-  from a covmat file at training time (from_covmat) or from
-  saved tensors at inference time (from_state); the
+  Whitening (see module PS) is applied to the input
+  parameters, so the emulator sees decorrelated, unit-variance
+  inputs instead of strongly-correlated physical parameters.
+  Build from a covmat file at training time (from_covmat) or
+  from saved tensors at inference time (from_state); the
   transform travels with the weights. center is the training
   mean of the parameters, subtracted before whitening.
   """
@@ -44,7 +41,7 @@ class ParamGeometry:
     """
     Place the transform tensors on the device.
 
-    Plain constructor: it only stores fields; the two
+    Plain constructor: stores fields only; the two
     classmethods below build them. as_tensor accepts numpy
     (from a covmat) or cpu tensors (from a saved state).
 
@@ -76,17 +73,14 @@ class ParamGeometry:
   def from_state(cls, device, state):
     """Rebuild from a saved state dict (inference path).
 
-    state is what state() returned; its keys match __init__,
-    so cls(device, **state) reconstructs the transform with
-    no covmat reread.
+    state's keys match __init__, so cls(device, **state)
+    reconstructs the transform with no covmat reread.
 
-    cls is this class, ParamGeometry. It is the standard
-    first argument of a classmethod -- the class itself,
-    just as self is the instance in a normal method -- so
-    cls(...) runs __init__ and returns a new instance.
+    cls is this class, ParamGeometry: the standard first
+    argument of a classmethod (the class itself, as self is
+    the instance in a normal method), so cls(...) runs
+    __init__ and returns a new instance.
     """
-    # cls(...) here is ParamGeometry(...): build and return
-    # a new instance through __init__. 
     return cls(device, **state)
 
   @classmethod
@@ -97,30 +91,21 @@ class ParamGeometry:
     The covmat columns are the emulated parameters in C0's
     order (sibling files from one run). Reads the header
     names for the record, then eigendecomposes the symmetric
-    covariance, cov = V diag(lam) V^T, with V orthonormal
-    and eigenvalues lam > 0 -- V is the rotation and
-    sqrt(lam) the whitening scale.
+    covariance, cov = V diag(lam) V^T, with V orthonormal and
+    eigenvalues lam > 0 -- V is the rotation, sqrt(lam) the
+    whitening scale. cls(...) is ParamGeometry(...): runs
+    __init__ and returns a new instance.
 
-    cls is this class, ParamGeometry. It is the standard
-    first argument of a classmethod -- the class itself,
-    just as self is the instance in a normal method -- so
-    cls(...) runs __init__ and returns a new instance.
-    
     Arguments:
       device      = device for the built tensors.
       center      = training mean of the parameters.
       covmat_path = path to the covmat file; its first line
                     is a "#"-prefixed list of column names.
-    
-    return cls(device, names, center, evecs, sqrt_ev)
-            └─ ParamGeometry(...) -> runs __init__ -> new instance
     """
     with open(covmat_path) as f:
       names = f.readline().lstrip("#").split()
     cov = np.loadtxt(covmat_path)
     lam, V = np.linalg.eigh(cov)
-    # cls(...) here is ParamGeometry(...): build and return
-    # a new instance through __init__.  
     return cls(device=device, names=names, center=center, evecs=V, sqrt_ev=np.sqrt(lam))
 
   def state(self):
@@ -134,11 +119,9 @@ class ParamGeometry:
     """
     Rotate into the eigenbasis; scale to unit variance.
 
-    x @ evecs rotates into the covariance eigenbasis;
-    dividing by sqrt_ev scales each direction to unit
-    variance, giving a decorrelated vector.
-
-    x @ evecs is (B, n) @ (n, n) → (B, n)
+    x @ evecs rotates into the covariance eigenbasis (shapes
+    (B, n) @ (n, n) -> (B, n)); dividing by sqrt_ev scales
+    each direction to unit variance, a decorrelated vector.
     """
     return (x @ self.evecs) / self.sqrt_ev
 
@@ -146,8 +129,8 @@ class ParamGeometry:
     """
     Exact inverse of whiten.
 
-    Multiply by sqrt_ev and rotate back (@ evecs.T);
-    evecs is orthonormal, so this inverts whiten exactly.
+    Multiply by sqrt_ev and rotate back (@ evecs.T); evecs is
+    orthonormal, so this inverts whiten exactly.
     """
     return (a * self.sqrt_ev) @ self.evecs.T
 
@@ -162,21 +145,21 @@ class ParamGeometry:
 
 class LogParamGeometry(ParamGeometry):
   """
-  ParamGeometry that whitens in LOG space for the positive,
+  ParamGeometry that whitens in log space for the positive,
   multiplicatively-acting parameters (linear for additive
-  nuisances). The dv depends on those params through PRODUCTS and
-  POWERS (A_s, (Om h^2)^ns, 1/h, ...), which are LINEAR in log --
-  so log inputs hand the network a flatter, lower-effective-DOF
-  map (the hardness lever), aimed at the A_s / Om h^2 structure
-  direction the hardness regression flagged.
+  nuisances). The dv depends on those through products and powers
+  (A_s, (Om h^2)^ns, 1/h, ...), linear in log -- so log inputs
+  hand the network a flatter, lower-effective-DOF map (the
+  hardness lever), aimed at the A_s / Om h^2 structure direction
+  the hardness regression flagged.
 
   log_mask[i] = True -> ln(param) before centering+whitening (exp
   on the way back). Defaults log A_s, H0, Omega_m, Omega_b. n_s
-  stays LINEAR on purpose: the dv depends on k^ns, so n_s is the
-  EXPONENT, not a multiplicative factor -- logging it would be
-  wrong. DZ / A1 stay linear too (they can be <= 0). center + basis
-  are computed in the TRANSFORMED space, hence from_samples (there
-  is no precomputed log covmat).
+  stays linear on purpose: the dv depends on k^ns, so n_s is the
+  exponent, not a multiplicative factor -- logging it would be
+  wrong. DZ / A1 stay linear too (they can be <= 0). center +
+  basis are computed in the transformed space, hence from_samples
+  (no precomputed log covmat).
   """
 
   def __init__(self, device, names, center, evecs, sqrt_ev,
@@ -198,18 +181,22 @@ class LogParamGeometry(ParamGeometry):
       names     = parameter column names (covmat order).
       log_names = which params to ln-transform (positive,
                   multiplicative in the dv). Empty () gives a
-                  plain LINEAR geometry built from samples.
+                  plain linear geometry built from samples.
     Returns:
       a LogParamGeometry; center / whitening basis live in the
       mixed log/linear space.
     """
     names = list(names)
-    log_mask = np.array([n in log_names for n in names])
+    # log_mask[i] = True if names[i] is a log-transformed param.
+    log_vals = []
+    for n in names:
+      log_vals.append(n in log_names)
+    log_mask = np.array(log_vals)
     X = np.asarray(samples, dtype="float64")
     assert (X[:, log_mask] > 0).all(), \
       "logged params must be strictly positive"
 
-    # transform the logged columns, then center in that mixed space.
+    # transform the logged columns, then center in that space.
     Xt = X.copy()
     Xt[:, log_mask] = np.log(Xt[:, log_mask])
     center = Xt.mean(0)
@@ -248,12 +235,12 @@ class LogParamGeometry(ParamGeometry):
 
 class NLAInputGeometry:
   """
-  Input whitening for the FACTORED NLA emulator. Whitens the 11
-  parameters EXCEPT the IA amplitude A1_1 (which factors out
-  exactly) and appends the RAW A1_1 as the last column, so the
-  loss can apply the A1_1 polynomial. The templates must NOT see
-  A1_1 -- if they did, the model could absorb A1_1 dependence
-  into them and the exact-A1_1 generalization would be lost.
+  Input whitening for the factored NLA emulator. Whitens the 11
+  parameters except the IA amplitude A1_1 (which factors out
+  exactly) and appends the raw A1_1 as the last column, so the
+  loss can apply the A1_1 polynomial. The templates must not see
+  A1_1 -- else the model could absorb A1_1 dependence into them
+  and the exact-A1_1 generalization would be lost.
 
   encode(raw_12) -> (B, 12): [11 whitened non-A1_1 params ; raw
   A1_1]. The model reads [:, :-1]; the loss reads [:, -1].
@@ -263,7 +250,7 @@ class NLAInputGeometry:
 
     Arguments:
       device  = device the index tensor lives on.
-      pg11    = ParamGeometry that whitens the 11 NON-A1_1
+      pg11    = ParamGeometry that whitens the 11 non-A1_1
                 parameters.
       idx_a1  = column index of A1_1 in the raw (n_param)-wide
                 parameter vector.
@@ -272,9 +259,12 @@ class NLAInputGeometry:
     self.pg11    = pg11
     self.idx_a1  = idx_a1
     self.n_param = n_param
-    # keep = the column indices that are NOT A1_1 (the 11 the
-    # model sees). A long tensor so it can index a tensor's cols.
-    keep = [j for j in range(n_param) if j != idx_a1]
+    # keep = column indices that are not A1_1 (the 11 the model
+    # sees). A long tensor so it can index a tensor's columns.
+    keep = []
+    for j in range(n_param):
+      if j != idx_a1:
+        keep.append(j)
     self.keep = torch.tensor(keep, dtype=torch.long,
                              device=device)
 
@@ -292,7 +282,7 @@ class NLAInputGeometry:
       center      = full (n_param,) training-mean parameters;
                     its 11 non-A1_1 entries center the inner
                     whitening.
-      covmat_path = path to the covmat file; its first line is a
+      covmat_path = path to the covmat file; first line is a
                     "#"-prefixed list of column names.
       a1_name     = name of the A1_1 column to factor out (here
                     "LSST_A1_1").
@@ -306,17 +296,23 @@ class NLAInputGeometry:
     cov    = np.loadtxt(covmat_path)
     idx_a1 = names.index(a1_name)
 
-    # keep = the 11 non-A1_1 columns, in their original order.
-    keep   = [j for j in range(len(names)) if j != idx_a1]
+    # keep = the 11 non-A1_1 columns, in original order.
+    keep = []
+    for j in range(len(names)):
+      if j != idx_a1:
+        keep.append(j)
     # 11x11 sub-covariance and the 11 sub-means (A1_1 removed).
     cov11  = cov[np.ix_(keep, keep)]
     cen    = (center.detach().cpu().numpy()
               if torch.is_tensor(center)
               else np.asarray(center))[keep]
 
-    # eigendecompose the sub-cov -> the inner whitening basis.
+    # eigendecompose the sub-cov -> inner whitening basis.
     lam, V = np.linalg.eigh(cov11)
-    pg11 = ParamGeometry(device, [names[j] for j in keep],
+    kept_names = []
+    for j in keep:
+      kept_names.append(names[j])
+    pg11 = ParamGeometry(device, kept_names,
                          cen, V, np.sqrt(lam))
 
     return cls(device=device, pg11=pg11, idx_a1=idx_a1, n_param=len(names))
@@ -329,9 +325,9 @@ class NLAInputGeometry:
               cosmology, columns in covmat order.
 
     Returns:
-      (B, n_param): the 11 non-A1_1 parameters whitened, with
-      the raw A1_1 appended as the last column (the model reads
-      [:, :-1], the loss reads [:, -1]).
+      (B, n_param): the 11 non-A1_1 parameters whitened, raw
+      A1_1 appended as the last column (model reads [:, :-1],
+      loss reads [:, -1]).
     """
     w11 = self.pg11.encode(theta[:, self.keep])   # (B, 11)
     a1  = theta[:, self.idx_a1:self.idx_a1 + 1]    # (B, 1) raw
@@ -359,19 +355,19 @@ class NLAInputGeometry:
 
 class AmplitudeFactorGeometry:
   """
-  Input whitening for a FACTORED intrinsic-alignment emulator.
-  Whitens every parameter EXCEPT the IA AMPLITUDES (which factor
+  Input whitening for a factored intrinsic-alignment emulator.
+  Whitens every parameter except the IA amplitudes (which factor
   out of the data vector exactly, as a polynomial) and appends
   the raw amplitudes as the last columns, so the loss can apply
-  that polynomial. The templates must NOT see the amplitudes --
+  that polynomial. The templates must not see the amplitudes --
   else the model could absorb amplitude dependence into them and
   the exact, prior-width-independent amplitude generalization
   would be lost.
 
   Generalizes the single-amplitude NLA case to any number of
   amplitudes: NLA factors out [A1_1] (1); TATT factors out
-  [a1, a2, b_TA] (3). The redshift-evolution POWERS (eta; the
-  NLA A1_2, the TATT eta1/eta2) STAY in the whitened input --
+  [a1, a2, b_TA] (3). The redshift-evolution powers (eta; the
+  NLA A1_2, the TATT eta1/eta2) stay in the whitened input --
   they sit inside the projection integral and do not factor.
 
   encode(raw) -> (B, n_param): [whitened non-amplitude params ;
@@ -386,7 +382,7 @@ class AmplitudeFactorGeometry:
       pg_keep = ParamGeometry that whitens the non-amplitude
                 parameters.
       amp_idx = list of amplitude column indices in the raw
-                parameter vector, IN THE ORDER the coeff_fn
+                parameter vector, in the order the coeff_fn
                 expects (e.g. [a1, a2, b_TA] for TATT).
       n_param = total number of raw parameters.
     """
@@ -396,9 +392,12 @@ class AmplitudeFactorGeometry:
     # amplitude columns, in coeff_fn order (appended as-is).
     self.amp_idx = torch.tensor(amp_idx, dtype=torch.long,
                                 device=device)
-    # keep = every column that is NOT an amplitude, original order.
+    # keep = every non-amplitude column, in original order.
     amp_set = set(amp_idx)
-    keep = [j for j in range(n_param) if j not in amp_set]
+    keep = []
+    for j in range(n_param):
+      if j not in amp_set:
+        keep.append(j)
     self.keep = torch.tensor(keep, dtype=torch.long,
                              device=device)
 
@@ -419,8 +418,8 @@ class AmplitudeFactorGeometry:
       covmat_path = path to the covmat file; first line is a
                     "#"-prefixed list of column names.
       amp_names   = list of amplitude column names to factor
-                    out, IN the coeff_fn order (NLA:
-                    ["LSST_A1_1"]; TATT: the a1/a2/b_TA names).
+                    out, in coeff_fn order (NLA: ["LSST_A1_1"];
+                    TATT: the a1/a2/b_TA names).
 
     Returns:
       an AmplitudeFactorGeometry whose encode whitens the
@@ -429,17 +428,25 @@ class AmplitudeFactorGeometry:
     with open(covmat_path) as f:
       names = f.readline().lstrip("#").split()
     cov     = np.loadtxt(covmat_path)
-    amp_idx = [names.index(a) for a in amp_names]
+    amp_idx = []
+    for a in amp_names:
+      amp_idx.append(names.index(a))
     amp_set = set(amp_idx)
 
-    keep    = [j for j in range(len(names)) if j not in amp_set]
+    keep = []
+    for j in range(len(names)):
+      if j not in amp_set:
+        keep.append(j)
     cov_k   = cov[np.ix_(keep, keep)]
     cen     = (center.detach().cpu().numpy()
                if torch.is_tensor(center)
                else np.asarray(center))[keep]
 
     lam, V  = np.linalg.eigh(cov_k)
-    pg_keep = ParamGeometry(device, [names[j] for j in keep],
+    kept_names = []
+    for j in keep:
+      kept_names.append(names[j])
+    pg_keep = ParamGeometry(device, kept_names,
                             cen, V, np.sqrt(lam))
 
     return cls(device=device, pg_keep=pg_keep, amp_idx=amp_idx, n_param=len(names))
@@ -452,8 +459,8 @@ class AmplitudeFactorGeometry:
               cosmology, columns in covmat order.
 
     Returns:
-      (B, n_param): the non-amplitude params whitened, with the
-      raw amplitudes appended as the last n_amps columns (model
+      (B, n_param): the non-amplitude params whitened, raw
+      amplitudes appended as the last n_amps columns (model
       reads [:, :-n_amps], loss reads [:, -n_amps:]).
     """
     w    = self.pg_keep.encode(theta[:, self.keep])

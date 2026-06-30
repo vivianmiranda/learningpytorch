@@ -11,7 +11,7 @@ def tatt_coeffs(amps):
   The TATT intrinsic-alignment field is a1*O1 + a2*O2 +
   a1*b_TA*O1d, so xi is exactly a polynomial in (a1, a2, b_TA):
   GG (no IA) + GI (linear in the field) + II (quadratic). The 10
-  templates, in THIS order (the model and loss must agree), are
+  templates, in this order (the model and loss must agree), are
     [GG, GI1, GI2, GI1d, II11, II22, II1d1d, II12, II11d, II21d].
 
   Arguments:
@@ -43,19 +43,19 @@ class NLAAmpFactoredChi2(CosmolikeChi2):
   Factored NLA loss. The model outputs three whitened templates
   [GG, GI, II]; this loss reads each sample's IA amplitude A1_1
   (the appended last column of the encoded params) and combines
-  them in CLOSED FORM, xi = GG + A1_1*GI + A1_1^2*II, then scores
-  the standard chi2 on the combined (whitened) xi. The exact
-  A1_1 dependence is IMPOSED, not learned, and A1_1 never enters
-  the network -- so it generalizes perfectly in A1_1, free at
-  inference, prior-width-independent.
+  them in closed form, xi = GG + A1_1*GI + A1_1^2*II, then scores
+  the standard chi2 on the combined xi. The A1_1 dependence is
+  imposed, not learned, and A1_1 never enters the network -- so it
+  generalizes perfectly, free at inference, prior-width-
+  independent.
 
-  The combination is LINEAR, so it commutes with the whitening
-  (combining whitened templates == whitening the combined xi),
-  and the training mean (center) is absorbed into the GG
-  template automatically (the net learns whatever matches the
-  whitened target geom.encode(xi)). A1_1 is physical (A1_1 = 0
-  is the no-IA limit). Trained on the EXISTING (cosmo, A1_2,
-  A1_1) -> xi samples -- A1_1 is read per sample, not extracted.
+  The combination is linear, so it commutes with the whitening
+  (combining whitened templates == whitening the combined xi), and
+  the center is absorbed into the GG template automatically (the
+  net learns whatever matches geom.encode(xi)). A1_1 is physical
+  (A1_1 = 0 is the no-IA limit). Trained on the existing
+  (cosmo, A1_2, A1_1) -> xi samples -- A1_1 is read per sample, not
+  extracted.
 
   needs_params = True (the loss needs A1_1).
   """
@@ -66,13 +66,12 @@ class NLAAmpFactoredChi2(CosmolikeChi2):
     """Raw dv -> whitened xi target the combination must match.
 
     Arguments:
-      dv              = (B, total_size) raw full data vectors,
-                        the xi observed at each sample's own
-                        A1_1.
-      params_whitened = (B, n_param) encoded params; NOT used to
-                        build the target (it is the standard
-                        whitened xi), accepted only to match the
-                        param-aware encode signature.
+      dv              = (B, total_size) raw full data vectors, the
+                        xi observed at each sample's own A1_1.
+      params_whitened = (B, n_param) encoded params; not used to
+                        build the target (the standard whitened
+                        xi), accepted only to match the param-aware
+                        encode signature.
 
     Returns:
       (B, n_keep): the whitened xi target.
@@ -85,12 +84,12 @@ class NLAAmpFactoredChi2(CosmolikeChi2):
     Arguments:
       pred            = (B, 3, n_keep) whitened templates
                         [GG, GI, II].
-      params_whitened = (B, n_param) encoded params whose LAST
-                        column is the physical A1_1.
+      params_whitened = (B, n_param) encoded params, last column
+                        the physical A1_1.
 
     Returns:
-      (B, n_keep): the whitened xi = GG + A1_1*GI + A1_1^2*II,
-      per sample.
+      (B, n_keep): whitened xi = GG + A1_1*GI + A1_1^2*II per
+      sample.
     """
     a1 = params_whitened[:, -1:]                # (B, 1) physical
     GG, GI, II = pred[:, 0], pred[:, 1], pred[:, 2]
@@ -101,12 +100,12 @@ class NLAAmpFactoredChi2(CosmolikeChi2):
 
     Arguments:
       pred            = (B, 3, n_keep) whitened templates.
-      params_whitened = (B, n_param) encoded params (A1_1 in the
-                        last column).
+      params_whitened = (B, n_param) encoded params (A1_1 last
+                        column).
 
     Returns:
       (B, n_keep): the physical squeezed xi (combine the
-      templates, then un-whiten and add the center back).
+      templates, un-whiten, add the center back).
     """
     return self.geom.decode(
       self._combine(pred=pred, params_whitened=params_whitened))
@@ -118,14 +117,13 @@ class NLAAmpFactoredChi2(CosmolikeChi2):
     Arguments:
       pred            = (B, 3, n_keep) whitened templates.
       target          = (B, n_keep) whitened xi (from encode).
-      params_whitened = (B, n_param) encoded params (A1_1 in the
-                        last column), or None to use the loss()
-                        stash.
-      full            = if True, use the full-Cinv reference
-                        path; else the fast masked-block path.
+      params_whitened = (B, n_param) encoded params (A1_1 last
+                        column), or None to use the loss() stash.
+      full            = if True, the full-Cinv reference path;
+                        else the fast masked-block path.
 
     Returns:
-      (B,): the per-sample chi2 of the combined xi vs target.
+      (B,): per-sample chi2, combined xi vs target.
     """
     if params_whitened is None:
       params_whitened = self._params
@@ -136,17 +134,16 @@ class NLAAmpFactoredChi2(CosmolikeChi2):
            *args, **kwargs):
     """Scalar training loss from the combined-xi chi2.
 
-    Stashes the params so the inherited reduction -- which calls
-    self.chi2(pred, target) without params -- can recover A1_1.
+    Stashes params so the inherited reduction (which calls
+    self.chi2 without params) can recover A1_1.
 
     Arguments:
       pred            = (B, 3, n_keep) whitened templates.
       target          = (B, n_keep) whitened xi.
-      params_whitened = (B, n_param) encoded params (A1_1 in the
-                        last column).
-      *args, **kwargs = the reduction knobs forwarded to the
-                        base loss (mode, trim, focus,
-                        focus_scale).
+      params_whitened = (B, n_param) encoded params (A1_1 last
+                        column).
+      *args, **kwargs = reduction knobs forwarded to the base
+                        loss (mode, trim, focus, focus_scale).
 
     Returns:
       the scalar training loss.
@@ -159,21 +156,20 @@ class NLAAmpFactoredChi2(CosmolikeChi2):
 class TemplateFactoredChi2(CosmolikeChi2):
   """
   Factored IA loss. The model outputs n_templates whitened
-  templates; this loss reads each sample's IA AMPLITUDES (the
-  appended last n_amps columns), builds the polynomial
-  coefficients via coeff_fn, combines the templates in CLOSED
-  FORM (xi = sum_t c_t * template_t), and scores the standard
-  chi2 on the combined whitened xi.
+  templates; this loss reads each sample's IA amplitudes (the
+  appended last n_amps columns), builds the coefficients via
+  coeff_fn, combines the templates in closed form
+  (xi = sum_t c_t * template_t), and scores the standard chi2 on
+  the combined xi.
 
-  The amplitude dependence is IMPOSED, not learned; the
-  amplitudes never enter the network, so the emulator
-  generalizes perfectly in them, free at inference, and the
-  amplitude PRIOR costs zero training coverage -- the win that
-  grows from NLA's 1 amplitude to TATT's coupled, wide-prior 3.
-  The combine is LINEAR in the templates, so it commutes with
-  the whitening; the center is absorbed into the GG (constant-
-  coefficient) template. Amplitudes are physical (all zero = the
-  no-IA limit); coeff_fn defines the template order.
+  The amplitude dependence is imposed, not learned; the amplitudes
+  never enter the network, so the emulator generalizes perfectly in
+  them, free at inference, and the amplitude prior costs zero
+  training coverage -- the win that grows from NLA's 1 amplitude to
+  TATT's coupled, wide-prior 3. The combine is linear, so it
+  commutes with the whitening; the center is absorbed into the GG
+  (constant-coefficient) template. Amplitudes are physical (all
+  zero = the no-IA limit); coeff_fn defines the template order.
 
   needs_params = True (the loss needs the amplitudes).
   """
@@ -189,8 +185,8 @@ class TemplateFactoredChi2(CosmolikeChi2):
       coeff_fn = callable (B, n_amps) physical amplitudes ->
                  (B, n_templates) coefficients (nla_coeffs,
                  tatt_coeffs).
-      n_amps   = number of appended amplitude columns to read
-                 from the end of the encoded params.
+      n_amps   = number of appended amplitude columns to read from
+                 the end of the encoded params.
     """
     super().__init__(geom)
     self.coeff_fn = coeff_fn
@@ -200,8 +196,8 @@ class TemplateFactoredChi2(CosmolikeChi2):
     """Raw dv -> whitened xi target the combination must match.
 
     Arguments:
-      dv              = (B, total_size) raw full data vectors,
-                        the xi observed at each sample's own
+      dv              = (B, total_size) raw full data vectors, the
+                        xi observed at each sample's own
                         amplitudes.
       params_whitened = (B, n_param) encoded params; not used to
                         build the target, accepted to match the
@@ -218,9 +214,8 @@ class TemplateFactoredChi2(CosmolikeChi2):
     Arguments:
       pred            = (B, n_templates, n_keep) whitened
                         templates.
-      params_whitened = (B, n_param) encoded params whose LAST
-                        n_amps columns are the physical
-                        amplitudes.
+      params_whitened = (B, n_param) encoded params, last n_amps
+                        columns the physical amplitudes.
 
     Returns:
       (B, n_keep): the whitened xi = sum_t c_t * template_t.
@@ -228,8 +223,8 @@ class TemplateFactoredChi2(CosmolikeChi2):
     amps = params_whitened[:, -self.n_amps:]   # (B, n_amps)
     c    = self.coeff_fn(amps)                 # (B, n_templates)
     # operands in subscript order: c (b,t) = amplitude
-    # coefficients, pred (b,t,k) = the t templates; sums over
-    # t to the combined xi (b,k).
+    # coefficients, pred (b,t,k) = the t templates; sums over t
+    # to the combined xi (b,k).
     return torch.einsum("bt,btk->bk", c, pred)
 
   def decode(self, pred, params_whitened):
@@ -239,7 +234,7 @@ class TemplateFactoredChi2(CosmolikeChi2):
       pred            = (B, n_templates, n_keep) whitened
                         templates.
       params_whitened = (B, n_param) encoded params (amplitudes
-                        in the last n_amps columns).
+                        last n_amps columns).
 
     Returns:
       (B, n_keep): the physical squeezed xi.
@@ -256,13 +251,13 @@ class TemplateFactoredChi2(CosmolikeChi2):
                         templates.
       target          = (B, n_keep) whitened xi (from encode).
       params_whitened = (B, n_param) encoded params (amplitudes
-                        in the last n_amps columns), or None to
-                        use the loss() stash.
-      full            = if True, use the full-Cinv reference
-                        path; else the fast masked-block path.
+                        last n_amps columns), or None to use the
+                        loss() stash.
+      full            = if True, the full-Cinv reference path;
+                        else the fast masked-block path.
 
     Returns:
-      (B,): the per-sample chi2 of the combined xi vs target.
+      (B,): per-sample chi2, combined xi vs target.
     """
     if params_whitened is None:
       params_whitened = self._params
@@ -273,9 +268,8 @@ class TemplateFactoredChi2(CosmolikeChi2):
            *args, **kwargs):
     """Scalar training loss from the combined-xi chi2.
 
-    Stashes the params so the inherited reduction -- which calls
-    self.chi2(pred, target) without params -- can recover the
-    amplitudes.
+    Stashes params so the inherited reduction (which calls
+    self.chi2 without params) can recover the amplitudes.
 
     Arguments:
       pred            = (B, n_templates, n_keep) whitened
@@ -283,7 +277,7 @@ class TemplateFactoredChi2(CosmolikeChi2):
       target          = (B, n_keep) whitened xi.
       params_whitened = (B, n_param) encoded params (amplitudes
                         last n_amps columns).
-      *args, **kwargs = the reduction knobs (mode, trim, focus,
+      *args, **kwargs = reduction knobs (mode, trim, focus,
                         focus_scale).
 
     Returns:

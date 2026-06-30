@@ -143,6 +143,25 @@ Sweep output is PLAIN TEXT (np.loadtxt columns + a "#" metadata header), NOT jso
 divisor / n_keep) so a sweep hits exact sizes from the deterministic nested pool.
 `make_logger` (the --quiet print-gate factory) lives in training.py.
 
+## Multi-GPU sweep + README (ADDED 2026-07-01)
+
+sweep_ntrain + bakeoff_activation now run MULTI-GPU on a single node (NVWULF, up
+to 8 H200): one torch.multiprocessing SPAWN process per GPU, each its own
+EmulatorExperiment. New module **emulator/scheduling.py** `lpt_assign(sizes,
+n_workers)` balances the N_train sweep by Longest-Processing-Time (cost ~ N); the
+bake-off instead splits by ACTIVATION (equal cost, no LPT). Correctness bits:
+spawn not fork, `torch.cuda.set_device(k)` per worker, del-refs + empty_cache
+between points, `ram_frac=0` in the parallel path (stream the SHARED dump memmap,
+no private per-worker copy). Serial fallback when n_workers<=1 (Mac/MPS); pure CPU
+refused. Full methodology -> [[multi-gpu-sweep-pattern]].
+
+**README.md** (repo root, cocoa-style): a numbered nested TOC, a teaching pipeline
+section with ASCII flow diagrams (params -> whiten -> model -> chi2; the
+experiment -> drivers orchestration; the dump -> subset -> 3 loader regimes; the
+ResCNN W_fd/W_df basis-change), and per-file APPENDICES indexing every function.
+All non-hot comprehensions in the package were converted to explicit C-style loops
+([[py-module-style-conventions]]).
+
 ## NEXT
 
 More drivers/variants (ResCNN, IA/TATT once the high-T TATT dataset exists,

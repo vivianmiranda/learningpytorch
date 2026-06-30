@@ -1,9 +1,9 @@
 """Training-history, learning-curve, coverage, and xi plots.
 
-This module holds the matplotlib figures (a colorblind-safe palette, no
-red/green). plot_history draws the training history, plot_diagnostics is
-the multipage diagnostics PDF (history, coverage, the local-linear floor,
-and the hard-direction regression), and plot_learning_curves overlays
+The matplotlib figures (a colorblind-safe palette, no red/green).
+plot_history draws the training history, plot_diagnostics the multipage
+diagnostics PDF (history, coverage, the local-linear floor, and the
+hard-direction regression), and plot_learning_curves overlays
 f(delta-chi2 > thr) vs N_train curves (the sweep / bake-off output).
 source_param_samples, dv_to_xi, and plot_xi handle the parameter-coverage
 triangle and the xi correlation-function curves. The "_"-prefixed helpers
@@ -26,9 +26,9 @@ _CB = ["#0072B2", "#E69F00", "#CC79A7", "#000000", "#56B4E9"]
 def _finish(fig, savepath):
   """Save the figure and close, or show it.
 
-  If savepath is given, write the figure there (format inferred
-  from the extension, e.g. .pdf) and close it -- a batch script has
-  no display to show on; if None, show it interactively.
+  If savepath is given, write the figure there (format from the
+  extension, e.g. .pdf) and close it -- a batch script has no
+  display; if None, show it interactively.
   """
   if savepath is not None:
     fig.savefig(savepath, bbox_inches="tight")
@@ -40,16 +40,16 @@ def _finish(fig, savepath):
 def _history_panels(ax_loss, ax_frac, train_losses, medians,
                     means, fracs, thresholds):
   """
-  Draw the two training-history panels onto the given axes.
+  Draw the two training-history panels.
 
-  ax_loss gets train loss / val median / val mean vs epoch (log y,
-  since the mean is heavy-tailed far above the median); ax_frac
-  gets the fraction of val points over each delta-chi2 threshold vs
-  epoch. Shared by plot_history (1x2) and plot_diagnostics (2x2),
-  so the two never drift apart.
+  ax_loss: train loss / val median / val mean vs epoch (log y, as
+  the mean is heavy-tailed far above the median). ax_frac: fraction
+  of val points over each delta-chi2 threshold vs epoch. Shared by
+  plot_history (1x2) and plot_diagnostics (2x2) so the two never
+  drift apart.
 
   Arguments:
-    ax_loss, ax_frac = the two matplotlib axes to draw on.
+    ax_loss, ax_frac = the two axes to draw on.
     train_losses     = per-epoch training loss (list).
     medians / means  = per-epoch val median / mean chi2 (lists).
     fracs            = per-epoch list of 1D tensors; fracs[i] is
@@ -57,8 +57,8 @@ def _history_panels(ax_loss, ax_frac, train_losses, medians,
     thresholds       = 1D tensor of delta-chi2 cutoffs (labels).
   """
   epochs = range(1, len(medians) + 1)
-  # Here x = epoch numbers and y = the per-epoch curve:
-  # train loss, val median, val mean.
+  # x = epoch, y = each per-epoch curve: train loss, val median,
+  # val mean.
   ax_loss.semilogy(epochs,
                    train_losses,
                    color=_CB[0],
@@ -77,7 +77,7 @@ def _history_panels(ax_loss, ax_frac, train_losses, medians,
 
   fr = torch.stack(fracs).cpu()      # (nepochs, n_thr)
   for j, t in enumerate(thresholds.tolist()):
-    # x = epochs, y = the fraction of val points over threshold j.
+    # x = epochs, y = fraction of val points over threshold j.
     ax_frac.plot(epochs,
                  fr[:, j],
                  color=_CB[j % len(_CB)],
@@ -89,16 +89,16 @@ def _history_panels(ax_loss, ax_frac, train_losses, medians,
 
 def _coverage_panels(ax_scatter, ax_hist, knn_dist, dchi2, k_nn):
   """
-  Draw the two coverage-diagnostic panels onto the given axes.
+  Draw the two coverage-diagnostic panels.
 
   ax_scatter: per-val hardness log10(dchi2) vs local sparsity (mean
   distance to the k nearest training points), with the 0.2 goal
-  line. ax_hist: the sparsity distributions of the good
-  (dchi2<=0.2) and bad (dchi2>0.2) populations -- a right-shifted
-  "bad" histogram means failures live where training is scarce.
+  line. ax_hist: sparsity distributions of the good (dchi2<=0.2) and
+  bad (dchi2>0.2) populations -- a right-shifted "bad" histogram
+  means failures live where training is scarce.
 
   Arguments:
-    ax_scatter, ax_hist = the two matplotlib axes to draw on.
+    ax_scatter, ax_hist = the two axes to draw on.
     knn_dist = (Nval,) mean distance to the k nearest train points.
     dchi2    = (Nval,) per-val delta-chi2 (same row order).
     k_nn     = the k used (for the axis labels).
@@ -106,19 +106,19 @@ def _coverage_panels(ax_scatter, ax_hist, knn_dist, dchi2, k_nn):
   y   = np.log10(np.maximum(dchi2, 1e-4))
   bad = dchi2 > 0.2
 
-  # (a) hardness vs local sparsity. x = knn_dist, y = log10 dchi2,
-  # color = the same y; the dashed line is the 0.2 goal.
+  # (a) hardness vs local sparsity. x = knn_dist, y = color =
+  # log10 dchi2; the dashed line is the 0.2 goal.
   sc = ax_scatter.scatter(knn_dist, y, s=5, c=y, cmap="viridis")
   ax_scatter.axhline(np.log10(0.2), color="0.4", lw=1, ls="--")
   ax_scatter.set_xlabel(f"mean dist to {k_nn} nearest train pts")
   ax_scatter.set_ylabel(r"$\log_{10}\,\Delta\chi^2$")
-  # ax.figure is the parent figure -- add the colorbar to it.
+  # ax.figure is the parent figure; add the colorbar to it.
   ax_scatter.figure.colorbar(sc,
                              ax=ax_scatter,
                              label=r"$\log_{10}\,\Delta\chi^2$")
 
   # (b) good vs bad sparsity. x = knn_dist, y = density; shared
-  # bins so the two histograms are directly comparable.
+  # bins so the two histograms are comparable.
   bins = np.linspace(knn_dist.min(), knn_dist.max(), 40)
   ax_hist.hist(knn_dist[~bad],
                bins=bins,
@@ -149,11 +149,10 @@ def plot_history(train_losses,
   Left: train loss, val median, val mean vs epoch (log y). Right:
   fraction of val points over each delta-chi2 threshold vs epoch.
 
-  Arguments (the four histories run_emulator returns, plus the
-  thresholds used):
+  Arguments (the four run_emulator histories, plus the thresholds):
     train_losses = per-epoch training loss (list of floats); the
-                   sqrt-trimmed objective, so on a different scale
-                   than the raw-chi2 val metrics.
+                   sqrt-trimmed objective, on a different scale than
+                   the raw-chi2 val metrics.
     medians      = per-epoch val median chi2 (list).
     means        = per-epoch val mean chi2 (list).
     fracs        = per-epoch list of 1D tensors; fracs[i] holds the
@@ -161,9 +160,8 @@ def plot_history(train_losses,
                    epoch i+1.
     thresholds   = 1D tensor of delta-chi2 cutoffs used in
                    training; labels the right panel.
-    savepath     = if given, write the figure there (format from
-                   the extension, e.g. .pdf) and close it; if None
-                   (default), show it interactively.
+    savepath     = if given, write the figure there and close; if
+                   None (default), show it interactively.
   """
   fig, ax = plt.subplots(1, 2, figsize=(11, 4))
   _history_panels(ax[0], ax[1], train_losses, medians, means,
@@ -180,16 +178,16 @@ def plot_learning_curves(curves,
   Overlay one or more learning curves: f(delta-chi2 > threshold) vs
   N_train.
 
-  One descending curve per entry, on log-log axes (the small-N regime,
-  where methods separate, is spread out). A curve still falling at the
-  largest N means data-limited (more data helps); a flat tail means
-  capacity / architecture-limited. The lines use a colorblind palette +
-  a marker cycle (no red/green), so a single-config sweep passes a
-  one-entry dict and a bake-off passes one entry per variant.
+  One descending curve per entry, on log-log axes (spreading out the
+  small-N regime where methods separate). A curve still falling at the
+  largest N is data-limited (more data helps); a flat tail is
+  capacity / architecture-limited. Lines use a colorblind palette + a
+  marker cycle (no red/green); a single-config sweep passes a
+  one-entry dict, a bake-off one entry per variant.
 
   Arguments:
-    curves    = mapping label -> the curve, where the curve is EITHER a
-                {N_train: frac} dict OR an (sizes, fracs) pair (both are
+    curves    = mapping label -> the curve, where the curve is either a
+                {N_train: frac} dict or an (sizes, fracs) pair (both
                 sorted by N here). label is the legend text.
     threshold = the delta-chi2 cutoff the fraction counts (default 0.2,
                 the emulator goal); labels the y axis.
@@ -202,17 +200,20 @@ def plot_learning_curves(curves,
   fig, ax = plt.subplots(figsize=(6.8, 5.6))
 
   for k, (label, curve) in enumerate(curves.items()):
-    # accept either {N: frac} or a (sizes, fracs) pair.
+    # accept {N: frac} or a (sizes, fracs) pair.
     if isinstance(curve, dict):
-      sizes = np.array(sorted(curve), dtype="float64")
-      fracs = np.array([curve[n] for n in sorted(curve)],
-                       dtype="float64")
+      keys  = sorted(curve)
+      sizes = np.array(keys, dtype="float64")
+      fvals = []
+      for n in keys:
+        fvals.append(curve[n])
+      fracs = np.array(fvals, dtype="float64")
     else:
       sizes = np.asarray(curve[0], dtype="float64")
       fracs = np.asarray(curve[1], dtype="float64")
       order = np.argsort(sizes)            # plot left-to-right in N
       sizes, fracs = sizes[order], fracs[order]
-    # x = N_train, y = the fraction over the threshold.
+    # x = N_train, y = fraction over the threshold.
     ax.plot(sizes,
             fracs,
             "-" + markers[k % len(markers)],
@@ -235,23 +236,23 @@ def plot_learning_curves(curves,
 
 def _floor_panel(ax, floor):
   """
-  Draw the local-linear data-floor panel onto the given axis.
+  Draw the local-linear data-floor panel.
 
   Per val point: the model's delta-chi2 vs the data-only floor (the
   local-linear prediction's delta-chi2), log-log. Points on the
   diagonal mean the net is at what a smooth local method extracts
-  from the data (data-limited); points well above mean the net has
-  headroom. The dotted lines mark the 0.2 goal on each axis.
+  from the data (data-limited); points well above mean it has
+  headroom. Dotted lines mark the 0.2 goal on each axis.
 
   Arguments:
-    ax    = the matplotlib axis to draw on.
+    ax    = the axis to draw on.
     floor = the dict local_linear_floor returned (dchi2_floor,
             dchi2_model, f_floor, f_model, f_hard).
   """
   lo = 1e-3
   dchi2_floor = floor["dchi2_floor"]
   dchi2_model = floor["dchi2_model"]
-  # x = data-only floor dchi2, y = model dchi2; floor both at lo so
+  # x = data-only floor dchi2, y = model dchi2; clip both at lo so
   # a near-zero point stays on the log axes.
   ax.scatter(np.maximum(dchi2_floor, lo),
              np.maximum(dchi2_model, lo),
@@ -271,29 +272,31 @@ def _floor_panel(ax, floor):
 
 def _hard_direction_panels(ax_uni, ax_joint, hd):
   """
-  Draw the hard-direction regression onto two axes (bar charts).
+  Draw the hard-direction regression as two bar charts.
 
   ax_uni: each feature's univariate |correlation| with log10 dchi2
   (a collinearity-robust ranking). ax_joint: the joint log-linear
-  OLS coefficients (the alpha, beta, ... combination). The joint
-  R^2 and the ln(omega_b h^2)-alone R^2 are in the titles. Both
-  panels share the feature order (descending univariate |corr|).
+  OLS coefficients (the alpha, beta, ... combination). The joint R^2
+  and the ln(omega_b h^2)-alone R^2 are in the titles. Both panels
+  share the feature order (descending univariate |corr|).
 
   Arguments:
-    ax_uni, ax_joint = the two matplotlib axes to draw on.
+    ax_uni, ax_joint = the two axes to draw on.
     hd = the dict hard_direction_regression returned (labels,
          univariate, joint_coef, r2, r2_omega).
   """
   labels = hd["labels"]
   uni    = hd["univariate"]
   coef   = hd["joint_coef"]
-  # order features by descending univariate |corr|; both panels use
-  # this same order so the bars line up.
+  # order features by descending univariate |corr|; both panels
+  # share this order so the bars line up.
   order = np.argsort(np.abs(uni))[::-1]
   ypos  = np.arange(len(order))
-  names = [labels[j] for j in order]
+  names = []
+  for j in order:
+    names.append(labels[j])
 
-  # barh(y, width): y = bar slot, width = the value.
+  # barh(y, width): y = bar slot, width = value.
   ax_uni.barh(ypos, np.abs(uni)[order], color=_CB[0])
   ax_uni.set_yticks(ypos)
   ax_uni.set_yticklabels(names)
@@ -343,18 +346,18 @@ def plot_diagnostics(train_losses,
                      hard_dir=None,
                      savepath=None):
   """
-  All available diagnostics as a single MULTIPAGE figure / PDF.
+  All available diagnostics as a single multipage figure / PDF.
 
   Page 1 (2x2): the training history (loss curves; fraction over
-    each delta-chi2 threshold vs epoch) AND the coverage diagnostic
+    each delta-chi2 threshold vs epoch) and the coverage diagnostic
     (hardness vs local sparsity; good/bad sparsity histograms).
   Page 2: the local-linear data-only floor (model vs floor
     delta-chi2), if `floor` is given.
-  Page 3: the hard-direction regression (univariate ranking and the
+  Page 3: the hard-direction regression (univariate ranking and
     joint log-linear coefficients), if `hard_dir` is given.
 
   floor / hard_dir are optional so a run can drop a page it cannot
-  produce (e.g. the local-linear floor is only defined for a plain
+  produce (e.g. the local-linear floor is defined only for a plain
   chi2fn, so a --rescale run omits it).
 
   Arguments:
@@ -397,11 +400,11 @@ def source_param_samples(source, names, labels, label):
   """
   getdist MCSamples of one source's cosmological parameters.
 
-  Pulls the rows the source actually uses (source["idx"]) from
-  its parameter dump and wraps them as equally-weighted
-  samples for a coverage triangle (no likelihood, no chi2).
-  Reads no module globals -- source, names, labels, and the
-  legend label all arrive as arguments.
+  Pulls the rows the source actually uses (source["idx"]) from its
+  parameter dump and wraps them as equally-weighted samples for a
+  coverage triangle (no likelihood, no chi2). Reads no module
+  globals -- source, names, labels, and the legend label all arrive
+  as arguments.
 
   Arguments:
     source = source dict with "C" (full param dump) and "idx"
@@ -414,8 +417,8 @@ def source_param_samples(source, names, labels, label):
   Returns:
     an MCSamples over the source's used parameter rows.
   """
-  # the rows this source actually uses -- coverage is about
-  # what was trained / validated on, not the whole file.
+  # the rows this source uses -- coverage is about what was
+  # trained / validated on, not the whole file.
   rows = np.sort(source["idx"])
   # raw physical parameters of those rows (never whitened).
   P = np.asarray(source["C"][rows], dtype="float64")
@@ -433,11 +436,10 @@ def dv_to_xi(dv_row, geom):
   Reshape one full data-vector row into the (theta, xip, xim)
   matrix layout of plot_xi, using its cosmic-shear block.
 
-  Takes the leading xi_size entries (xi_plus then xi_minus,
-  pairs (i<=j) outer / theta inner) and scatters each pair's
-  ntheta values into the (i, j) slot of an
-  (ntheta, ntomo, ntomo) array (upper triangle filled; the
-  rest stay 0 and plot_xi never reads them).
+  Takes the leading xi_size entries (xi_plus then xi_minus, pairs
+  (i<=j) outer / theta inner) and scatters each pair's ntheta values
+  into the (i, j) slot of an (ntheta, ntomo, ntomo) array (upper
+  triangle filled; the rest stay 0 and plot_xi never reads them).
 
   Arguments:
     dv_row = (total_size,) full data vector; only the leading
@@ -445,12 +447,16 @@ def dv_to_xi(dv_row, geom):
     geom   = geometry carrying ntheta / source_ntomo /
              theta_centers / xi_size.
   Returns:
-    (theta, xip, xim): theta (ntheta,) [arcmin], xip/xim (ntheta, ntomo, ntomo).
+    (theta, xip, xim): theta (ntheta,) [arcmin]; xip, xim
+    (ntheta, ntomo, ntomo).
   """
   nt    = geom.source_ntomo
   ntha  = geom.ntheta
   block = np.asarray(dv_row[:geom.xi_size], dtype="float64")
-  pairs = [(i, j) for i in range(nt) for j in range(i, nt)]
+  pairs = []
+  for i in range(nt):
+    for j in range(i, nt):
+      pairs.append((i, j))
   half  = len(pairs) * ntha
   xip = np.zeros((ntha, nt, nt))
   xim = np.zeros((ntha, nt, nt))

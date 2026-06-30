@@ -6,58 +6,54 @@
 # Example how to run this program
 #-------------------------------------------------------------------------------
 #-------------------------------------------------------------------------------
-# This bakes off the ResBlock ACTIVATION head-to-head: for each activation it
-# measures the validation f(delta-chi2 > threshold) over a grid of training-set
-# sizes, and overlays the learning curves. A DOUBLE loop -- N_train x activation
-# -- and the verdict is the curve SHAPE: a real inductive-bias win shows as a
-# curve that keeps descending (lower sample complexity) where the others
-# flatten, not as a single-N offset.
+# Bakes off the ResBlock activation head-to-head: per activation, measures
+# validation f(delta-chi2 > threshold) over a grid of training-set sizes,
+# overlaying the curves. A double loop (N_train x activation) whose verdict is
+# the curve shape: a real inductive-bias win keeps descending (lower sample
+# complexity) where others flatten, not a single-N offset.
 #
 #     python driver/bakeoff_activation_emulator_cosmic_shear.py \
 #       --yaml driver/train_single_emulator_cosmic_shear.yaml \
 #       --n-min 2000 --n-points 6 --out bakeoff_act
 #
-#- For each N_train (geometric grid [--n-min .. --n-max], --n-max defaults to
-#  the full physically-cut training pool), it stages a NESTED training subset
-#  and builds the geometry ONCE, then trains a FRESH model per activation
-#  (silently) and scores f(delta-chi2 > --threshold) on the FIXED validation
-#  set. The data + geometry do not depend on the activation, so they are shared
-#  across the activations at a given N (only the model is rebuilt).
+#- Per N_train (geometric grid [--n-min .. --n-max], --n-max defaults to the
+#  full physically-cut pool), stages a nested subset and builds the geometry
+#  once, then silently trains a fresh model per activation and scores
+#  f(delta-chi2 > --threshold) on the fixed validation set. Data and geometry
+#  are activation-independent: shared at that N; only the model rebuilds.
 #
-#- MULTIPLE GPUs (one node): the activations are split across GPUs, one process
-#  per GPU, each running every N_train for its share of the activations. Every
-#  activation costs about the same and every GPU runs the whole N_train grid, so
-#  the GPUs carry equal work with NO cost-aware balancing (unlike the N_train
-#  sweep, which needs it). At most len(activations) GPUs are used; with the
-#  default 4 activations and 8 GPUs, 4 GPUs sit idle. With --n-gpus 4:
+#- Multiple GPUs (one node): activations split across GPUs, one process per GPU,
+#  each running the whole grid for its share. Activations cost about the same
+#  and every GPU runs the full grid: equal work, no cost-aware balancing (unlike
+#  the N_train sweep). At most len(activations) GPUs used; default 4
+#  activations, 8 GPUs, 4 idle. With --n-gpus 4:
 #
 #     python driver/bakeoff_activation_emulator_cosmic_shear.py \
 #       --yaml driver/train_single_emulator_cosmic_shear.yaml \
 #       --n-points 8 --n-gpus 4 --out bakeoff_act
 #
-#  With one GPU (or none, e.g. the Apple-MPS dev machine) it runs the plain
-#  serial double loop, so the same script runs everywhere.
+#  One GPU (or none, e.g. the Apple-MPS dev machine) runs the serial double
+#  loop, so one script runs everywhere.
 #
-#- It REUSES the training driver's YAML (its data, the model = ResMLP / ResCNN
-#  via train_args.model.name, and the rest of train_args). The activation in the
-#  YAML / the usual --activation flag is IGNORED here -- this driver sweeps the
-#  activation itself.
+#- Reuses the training driver's YAML (data, model = ResMLP / ResCNN via
+#  train_args.model.name, rest of train_args). The YAML activation and usual
+#  --activation flag are ignored; this driver sweeps it.
 #
-#- `--yaml` (required): the config (data + train_args), training-driver schema.
-#- `--activations` (default H,power,multigate,gated_power): the comma-separated
-#  subset of activations to bake off.
+#- `--yaml` (required): config (data + train_args), training-driver schema.
+#- `--activations` (default H,power,multigate,gated_power): comma-separated
+#  subset to bake off.
 #- `--rescale`: analytic-R mode, fixed across the bake-off (as in training).
 #- `--n-gpus` (default: all visible CUDA devices, capped at len(activations)):
-#  how many GPUs to split the activations across. 1, or no CUDA, is serial.
+#  GPUs to split activations across. 1, or no CUDA, is serial.
 #- `--n-min` (default 2000), `--n-max` (default = pool), `--n-points` (default
-#  5): the geometric N_train grid (clamped to the pool, deduplicated).
-#- `--threshold` (default 0.2): the delta-chi2 cutoff the fraction counts.
-#- `--out` (default bakeoff_act): writes <out>.txt (every curve + the config,
-#  np.loadtxt-loadable, one column per activation) and <out>.pdf (the figure).
-#- `--quiet`: suppress stdout (the .txt and .pdf are still written).
+#  5): geometric N_train grid (clamped to the pool, deduplicated).
+#- `--threshold` (default 0.2): delta-chi2 cutoff the fraction counts.
+#- `--out` (default bakeoff_act): writes <out>.txt (every curve + config,
+#  np.loadtxt-loadable, one column per activation) and <out>.pdf (figure).
+#- `--quiet`: suppress stdout (txt and pdf still written).
 #
-#- This trains one full model per (N_train, activation), so the run is
-#  len(grid) x len(activations) trainings long -- run it on the workstation.
+#- One full model per (N_train, activation): len(grid) x len(activations)
+#  trainings long -- run it on the workstation.
 #-------------------------------------------------------------------------------
 #-------------------------------------------------------------------------------
 
@@ -70,9 +66,9 @@ import numpy as np
 import torch
 import yaml
 
-# The emulator package sits ONE directory up from this driver/ folder.
-# Put the repo root on sys.path so `import emulator` resolves regardless
-# of the working directory (see the training driver for the why).
+# The emulator package sits one directory up from driver/; put the repo root on
+# sys.path so `import emulator` resolves from any working directory (see the
+# training driver for the why).
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
   sys.path.insert(0, ROOT)
@@ -81,61 +77,58 @@ from emulator.experiment import EmulatorExperiment
 from emulator.results import save_learning_curves
 
 
-# the activations this driver knows how to build (make_activation names).
+# activations this driver can build (make_activation names).
 ACTS = ["H", "power", "multigate", "gated_power"]
 
 
 def _bakeoff_worker(gpu_id, my_acts, sizes, cfg, rescale,
                     threshold, result_q):
   """
-  One GPU's share of the bake-off; runs in its own process.
+  One GPU's share of the bake-off, in its own process.
 
-  Pins itself to GPU `gpu_id`, builds its own EmulatorExperiment there, and
-  runs the FULL N_train grid for its assigned activations (`my_acts`). For
-  each N it stages the subset and builds the geometry once, then trains every
-  one of its activations on that shared geometry, putting one
-  (N, activation, frac, gpu_id, seconds) tuple onto result_q per training.
-  Each process has its own cosmolike global state and cached experiment, so
-  the workers never interfere. A per-training failure emits frac = nan, so the
-  parent receives exactly one result per (N, activation) and never deadlocks.
+  Pins itself to GPU `gpu_id`, builds its own EmulatorExperiment there, and runs
+  the full grid for `my_acts`: per N, stages the subset, builds the geometry
+  once, then trains each activation on it, putting an
+  (N, activation, frac, gpu_id, seconds) tuple onto result_q per training. Each
+  process has its own cosmolike global state and experiment, so workers never
+  interfere. A failed training emits frac = nan, so the parent gets one result
+  per (N, activation) and never deadlocks.
 
   Arguments:
     gpu_id    = CUDA device index this worker owns.
-    my_acts   = the activation names assigned to this GPU (its share).
-    sizes     = the full N_train grid (every worker runs all of it).
-    cfg       = the parsed YAML config (data + train_args), with the host
-                ram_frac already divided across the workers by the parent.
+    my_acts   = activations assigned to this GPU (its share).
+    sizes     = full N_train grid (every worker runs it all).
+    cfg       = YAML config (data + train_args), host ram_frac already split
+                across workers by the parent.
     rescale   = analytic-R mode, forwarded to the experiment.
     threshold = delta-chi2 cutoff for frac_above.
-    result_q  = multiprocessing queue the parent drains.
+    result_q  = process-safe queue the parent drains.
   """
-  # claim this GPU so every default-device op (and run_emulator's
-  # torch.cuda.mem_get_info, which reads the current device when it sizes the
-  # resident data set) targets this card, not card 0.
+  # claim this GPU so every default-device op (and run_emulator's mem_get_info,
+  # which reads the current device when sizing resident data) hits this card,
+  # not card 0.
   torch.cuda.set_device(gpu_id)
   device = torch.device(f"cuda:{gpu_id}")
 
-  # this worker's own experiment on its own GPU (quiet: the parent logs). The
-  # activation is set per training below; my_acts[0] is just the initial one.
+  # this worker's own experiment on its GPU (quiet: the parent logs). Activation
+  # is set per training below; my_acts[0] is just the first.
   exp = EmulatorExperiment.from_config(cfg,
                                        device=device,
                                        rescale=rescale,
                                        activation=my_acts[0],
                                        quiet=True)
-  # the validation set is fixed across the bake-off; stage it once per worker.
+  # validation set is fixed; stage it once per worker.
   exp.stage_val()
 
   for N in sizes:
-    # stage the subset and build the geometry once for this N; both are shared
-    # across this worker's activations (they do not depend on the activation).
+    # stage subset and build geometry once; both activation-independent.
     exp.stage_train(n_train=int(N))
     exp.build_geometry()
 
     for act in my_acts:
       t0 = time.time()
       try:
-        # build_specs reads exp.activation, so setting it then training picks
-        # up this activation (the geometry is reused unchanged).
+        # build_specs reads exp.activation, so set it before training.
         exp.activation = act
         exp.train(silent=True)
         f = float(exp.frac_above(threshold=threshold))
@@ -144,13 +137,13 @@ def _bakeoff_worker(gpu_id, my_acts, sizes, cfg, rescale,
         print(f"[gpu {gpu_id}] N_train {int(N)} act {act} failed: {err}")
       result_q.put((int(N), act, f, gpu_id, time.time() - t0))
 
-      # free this activation's model and loaders, but keep the shared
-      # geometry for the next activation. Returning the reserved VRAM lets the
-      # next training size its loaders against the true free memory.
+      # free this activation's model and loaders, keep the shared geometry.
+      # Returning the reserved VRAM lets the next training size its loaders to
+      # true free memory.
       exp.model = None
       torch.cuda.empty_cache()
 
-    # done with this N: free the geometry and staged data before the next N.
+    # done with this N: free geometry and staged data first.
     exp.train_set = None
     exp.geom      = None
     exp.pgeom     = None
@@ -162,16 +155,16 @@ def _run_serial_bakeoff(exp, sizes, activations, args, log):
   """
   Run the bake-off on a single device (no multiprocessing).
 
-  The path taken on the dev machine (Apple MPS) and on a single-GPU box.
-  Reuses the experiment the parent already built. N is the outer loop so the
-  geometry is built once per N and shared across the activations.
+  The path for the dev machine (Apple MPS) and a single-GPU box. Reuses the
+  parent's experiment. N is the outer loop, so geometry builds once per N and is
+  shared.
 
   Arguments:
-    exp         = the EmulatorExperiment, already built on the compute device.
-    sizes       = the N_train grid (a sequence of ints).
-    activations = the activation names to bake off.
-    args        = the parsed CLI namespace (threshold is read).
-    log         = the print function (a no-op under --quiet).
+    exp         = EmulatorExperiment, built on the compute device.
+    sizes       = N_train grid (ints).
+    activations = activations to bake off.
+    args        = CLI namespace (threshold read).
+    log         = print function (no-op under --quiet).
 
   Returns:
     curves = dict activation -> {N_train: frac}.
@@ -180,7 +173,9 @@ def _run_serial_bakeoff(exp, sizes, activations, args, log):
   log("loading validation source:")
   exp.stage_val()
 
-  curves = {act: {} for act in activations}
+  curves = {}
+  for act in activations:
+    curves[act] = {}
   for N in sizes:
     exp.stage_train(n_train=int(N))
     exp.build_geometry()
@@ -199,58 +194,73 @@ def _run_parallel_bakeoff(cfg, sizes, activations, n_workers, args, log):
   """
   Run the bake-off across n_workers GPUs, one process each.
 
-  Splits the activations evenly across the GPUs (a plain round-robin: each
-  activation costs about the same, and every GPU runs the whole N_train grid,
-  so the GPUs carry equal work with no cost-aware balancing). Spawns one
-  process per GPU (the spawn start method, since a forked child cannot reuse
-  the parent's CUDA context) and collects the per-(N, activation) fractions.
-  The host-RAM staging budget (ram_frac) is divided by n_workers so the
-  workers do not collectively overflow host memory.
+  Splits activations evenly across the GPUs (plain round-robin: each costs about
+  the same and every GPU runs the whole grid, so equal work without cost-aware
+  balancing). Spawns one process per GPU (spawn start method: a forked child
+  cannot reuse the parent's CUDA context) and collects per-(N, activation)
+  fractions. The host-RAM staging budget (ram_frac) is split by n_workers so
+  they do not collectively overflow host memory.
 
   Arguments:
-    cfg         = the parsed YAML config (data + train_args).
-    sizes       = the N_train grid (a sequence of ints).
-    activations = the activation names to bake off.
-    n_workers   = number of GPU processes to launch.
-    args        = the parsed CLI namespace (rescale / threshold are read).
-    log         = the print function (a no-op under --quiet).
+    cfg         = YAML config (data + train_args).
+    sizes       = N_train grid (ints).
+    activations = activations to bake off.
+    n_workers   = GPU processes to launch.
+    args        = CLI namespace (rescale / threshold read).
+    log         = print function (no-op under --quiet).
 
   Returns:
     curves = dict activation -> {N_train: frac}.
   """
   import torch.multiprocessing as mp
 
-  # give each worker its share of the host-RAM staging budget. P workers on
-  # one node draw from one RAM, so each may fill at most ram_frac / P of it.
-  # Copy the data block first so the original cfg is left untouched.
-  base_frac = float(cfg["data"].get("ram_frac", 0.7))
+  # Workers make no private in-RAM copy of their subset: ram_frac 0 tells
+  # stage_source to keep the shared dump memmap and stream the subset from it.
+  # One memmap, shared across processes via the OS page cache, keeps per-worker
+  # host RAM flat regardless of GPU count; a private copy would multiply it by
+  # the GPU count for almost no gain (the subset is GPU-resident anyway). Copy
+  # the data block first to leave the original cfg intact.
   worker_cfg = dict(cfg)
   worker_cfg["data"] = dict(cfg["data"])
-  worker_cfg["data"]["ram_frac"] = base_frac / n_workers
+  worker_cfg["data"]["ram_frac"] = 0.0
 
-  # split the activations round-robin across the GPUs (activations[g::P] gives
-  # GPU g every P-th activation). Equal cost, so an even count per GPU is
-  # already balanced; no LPT needed here.
-  buckets = [activations[g::n_workers] for g in range(n_workers)]
+  # split activations round-robin: GPU g gets activation g, g + n_workers,
+  # g + 2*n_workers, ... (a strided walk). Equal counts, so no cost-aware (LPT)
+  # split.
+  buckets = []
+  for g in range(n_workers):
+    bucket = []
+    for i in range(g, len(activations), n_workers):
+      bucket.append(activations[i])
+    buckets.append(bucket)
   for k, b in enumerate(buckets):
     log(f"  gpu {k}: activations {b}")
 
-  # spawn (not fork) because CUDA state cannot be inherited across a fork. The
-  # worker is sent each GPU's activation bucket plus the full N_train grid.
+  # spawn (not fork): CUDA state cannot be inherited across a fork. Each worker
+  # gets its activation bucket plus the full grid.
   ctx = mp.get_context("spawn")
   result_q = ctx.Queue()
-  sizes_i = [int(N) for N in sizes]
+  sizes_i = []
+  for N in sizes:
+    sizes_i.append(int(N))
   procs = []
   for k in range(n_workers):
     p = ctx.Process(target=_bakeoff_worker,
-                    args=(k, buckets[k], sizes_i, worker_cfg,
-                          args.rescale, args.threshold, result_q))
+                    args=(k,
+                          buckets[k],
+                          sizes_i,
+                          worker_cfg,
+                          args.rescale,
+                          args.threshold,
+                          result_q))
     p.start()
     procs.append(p)
 
-  # drain one result per (N, activation) as the workers finish; the parent
-  # does all the logging (the workers run quiet).
-  curves = {act: {} for act in activations}
+  # drain one result per (N, activation) as workers finish; the parent does the
+  # logging (workers are quiet).
+  curves = {}
+  for act in activations:
+    curves[act] = {}
   total = len(sizes) * len(activations)
   for _ in range(total):
     N, act, f, gpu, secs = result_q.get()
@@ -330,29 +340,36 @@ def main():
                       action="store_true")
   args, unknown = parser.parse_known_args()
 
-  # validate the requested activations up front (fail before training).
-  activations = [a.strip() for a in args.activations.split(",")
-                 if a.strip()]
-  bad = [a for a in activations if a not in ACTS]
+  # validate activations up front (fail before training): parse --activations
+  # into a clean name list.
+  activations = []
+  for a in args.activations.split(","):
+    a = a.strip()
+    if a:
+      activations.append(a)
+  # collect any unknown names.
+  bad = []
+  for a in activations:
+    if a not in ACTS:
+      bad.append(a)
   if bad:
     raise ValueError(
       f"unknown activation(s) {bad}; choose from {ACTS}")
 
-  # headless figure output: pick a non-interactive matplotlib backend BEFORE
-  # emulator.plotting imports pyplot (done lazily below). Set before any
-  # worker spawns, so the children inherit it too.
+  # headless figure output: pick a non-interactive matplotlib backend before
+  # emulator.plotting imports pyplot (lazily, below) and any worker spawns, so
+  # children inherit it.
   os.environ.setdefault("MPLBACKEND", "Agg")
 
-  # read the config once. The parent uses it for the grid and hands a copy
-  # (with the host-RAM budget divided across workers) to each GPU process.
+  # read the config once: parent uses it for the grid and hands each GPU process
+  # a copy (host-RAM budget split across them).
   with open(args.yaml) as f:
     cfg = yaml.safe_load(f)
 
-  # build the experiment on the real compute device (CUDA, or Apple MPS on the
-  # dev machine); the pool size and model name are read off it, and the serial
-  # path reuses it. This bake-off trains a model per (N, activation), so it is
-  # a GPU tool: refuse a pure-CPU box. (The starting activation is a
-  # placeholder; each run sets its own.)
+  # build the experiment on the compute device (CUDA, or Apple MPS on the dev
+  # machine); pool size and model name read off it, serial path reuses it. A GPU
+  # tool: refuse a pure-CPU box. Starting activation is a placeholder, set per
+  # run.
   exp = EmulatorExperiment.from_config(cfg,
                                        rescale=args.rescale,
                                        activation=activations[0],
@@ -364,8 +381,8 @@ def main():
   log = exp.log
   model_name = exp.model_cls.__name__
 
-  # N_train grid: geometric from n_min to the pool (or --n-max), clamped to
-  # the physically-cut pool; unique() drops int-cast collisions.
+  # N_train grid: geometric from n_min to the pool (or --n-max), clamped to the
+  # pool; unique() drops int-cast collisions.
   pool  = exp.pool_size()
   n_max = pool if args.n_max is None else min(args.n_max, pool)
   if args.n_min >= n_max:
@@ -374,9 +391,8 @@ def main():
   sizes = np.unique(
     np.geomspace(args.n_min, n_max, args.n_points).astype(int))
 
-  # how many GPUs to use: capped by what is visible, by --n-gpus, and by the
-  # number of activations (the split is over activations, so more GPUs than
-  # activations would leave the extras idle).
+  # GPUs to use: capped by what is visible, by --n-gpus, and by the activation
+  # count (split is over activations, so extras sit idle).
   n_cuda    = torch.cuda.device_count()
   n_request = n_cuda if args.n_gpus is None else min(args.n_gpus, n_cuda)
   n_workers = min(n_request, len(activations))
@@ -385,30 +401,46 @@ def main():
       f"|  activations: {activations}")
   log(f"pool {pool}  |  N_train grid: {sizes.tolist()}")
 
-  # 1 worker (single GPU, or the MPS dev machine) -> serial, reusing the
-  # experiment already built; otherwise one process per GPU, split by
-  # activation.
+  # 1 worker (single GPU, or the MPS dev machine) -> serial, reusing the built
+  # experiment; else one process per GPU, by activation.
   if n_workers <= 1:
-    curves = _run_serial_bakeoff(exp=exp, sizes=sizes,
-                                 activations=activations, args=args, log=log)
+    curves = _run_serial_bakeoff(exp=exp,
+                                 sizes=sizes,
+                                 activations=activations,
+                                 args=args,
+                                 log=log)
   else:
     log(f"parallel bake-off across {n_workers} GPUs (split by activation):")
-    curves = _run_parallel_bakeoff(cfg=cfg, sizes=sizes,
+    curves = _run_parallel_bakeoff(cfg=cfg,
+                                   sizes=sizes,
                                    activations=activations,
-                                   n_workers=n_workers, args=args, log=log)
+                                   n_workers=n_workers,
+                                   args=args,
+                                   log=log)
 
-  # save every curve + the config as a plain-text table, one column per
-  # activation (np.loadtxt-loadable; the # header lines are skipped).
+  # save every curve + config as a plain-text table, one column per activation
+  # (np.loadtxt-loadable, # headers skipped).
   out_txt = args.out + ".txt"
   out_pdf = args.out + ".pdf"
+  # turn {activation: {N: frac}} into one column per activation, ordered to
+  # match `sizes`, for the table writer.
+  columns = {}
+  for act in activations:
+    col = []
+    for n in sizes:
+      col.append(curves[act][int(n)])
+    columns[act] = col
+
   save_learning_curves(
     path=out_txt,
     sizes=sizes,
-    curves={act: [curves[act][int(n)] for n in sizes]
-            for act in activations},
-    meta={"model": model_name, "rescale": args.rescale,
-          "activation": "swept", "threshold": args.threshold,
-          "pool": pool, "n_gpus": n_workers})
+    curves=columns,
+    meta={"model": model_name,
+          "rescale": args.rescale,
+          "activation": "swept",
+          "threshold": args.threshold,
+          "pool": pool,
+          "n_gpus": n_workers})
   log(f"saved curve data -> {out_txt}")
 
   # overlaid figure: one curve per activation.

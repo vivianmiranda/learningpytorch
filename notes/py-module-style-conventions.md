@@ -1,6 +1,6 @@
 ---
 name: py-module-style-conventions
-description: "Code style for the emulator/ PACKAGE and driver/ CLI files -- DISTINCT from the read-only teaching NOTEBOOK pytorch1.ipynb (which keeps the slide rules: <=~60 cols + hanging indent, [[hanging-indent-not-paren-alignment]]). Set by the user this session (2026-06-29): (1) NAMED PARAMETERS everywhere the callee allows -- the user's words, 'I will forget the meaning of position X'; covers our functions/methods, cls(...) constructors, nn.Linear/Conv1d (which is in vs out?), library config kwargs (dtype=/device=/dim=/color=), torch.cat(dim=), Normalize(vmin=/vmax=). (2) IRREDUCIBLY-POSITIONAL args (matplotlib plot/semilogy x/y data, torch.einsum operands, the array/tensor SUBJECT of torch.cat/from_numpy/np.asarray/np.zeros, a module call model(x)) STAY positional AND get a COMMENT naming them. (3) PAREN-ALIGNMENT (one arg per line under the opening paren) for .py -- OVERRIDES the hanging-indent slide rule. (4) 90-COLUMN width for .py (relaxed from slide ~60). (5) DIDACTIC comments on tricky mechanics, ESPECIALLY tensor-shape ops (unsqueeze/expand/[:,None] broadcasting, view, np.searchsorted); flag the geometry's OWN .unsqueeze (scatter-to-full-vector) vs torch.unsqueeze (add a size-1 axis) name-clash. GOTCHA: keep *args forwarders POSITIONAL (keywording pred= before *args -> 'multiple values' bug). DOC QUALITY (2026-06-30): module docstrings are PROSE (real subjects, not slash-as-subject lists); PS: jargon defs at file end (whitened/encoded/resident/loader/dump/memmap/Mahalanobis); no double-dash; blank-line-group dense method bodies (leave aligned = tables); cross-module call sites get a (module.py): what-it-does provenance comment; enumerate EVERY block-dict key in the docstring; comment math as an explicit display formula with named symbols."
+description: "Code style for the emulator/ PACKAGE and driver/ CLI files -- DISTINCT from the read-only teaching NOTEBOOK pytorch1.ipynb (which keeps the slide rules: <=~60 cols + hanging indent, [[hanging-indent-not-paren-alignment]]). Set by the user this session (2026-06-29): (1) NAMED PARAMETERS everywhere the callee allows -- the user's words, 'I will forget the meaning of position X'; covers our functions/methods, cls(...) constructors, nn.Linear/Conv1d (which is in vs out?), library config kwargs (dtype=/device=/dim=/color=), torch.cat(dim=), Normalize(vmin=/vmax=). (2) IRREDUCIBLY-POSITIONAL args (matplotlib plot/semilogy x/y data, torch.einsum operands, the array/tensor SUBJECT of torch.cat/from_numpy/np.asarray/np.zeros, a module call model(x)) STAY positional AND get a COMMENT naming them. (3) PAREN-ALIGNMENT (one arg per line under the opening paren) for .py -- OVERRIDES the hanging-indent slide rule. (4) 90-COLUMN width for .py (relaxed from slide ~60). (5) DIDACTIC comments on tricky mechanics, ESPECIALLY tensor-shape ops (unsqueeze/expand/[:,None] broadcasting, view, np.searchsorted); flag the geometry's OWN .unsqueeze (scatter-to-full-vector) vs torch.unsqueeze (add a size-1 axis) name-clash. GOTCHA: keep *args forwarders POSITIONAL (keywording pred= before *args -> 'multiple values' bug). DOC QUALITY (2026-06-30): module docstrings are PROSE (real subjects, not slash-as-subject lists); PS: jargon defs at file end (whitened/encoded/resident/loader/dump/memmap/Mahalanobis); no double-dash; blank-line-group dense method bodies (leave aligned = tables); cross-module call sites get a (module.py): what-it-does provenance comment; enumerate EVERY block-dict key in the docstring; comment math as an explicit display formula with named symbols. MORE (2026-07-01): NO comprehensions in non-hot code -> explicit C-style loops (keep vectorized numpy/torch math: einsum/@/x[:,idx]/broadcast/forward; AST-scan to find them, grep misses multi-line); paren-align one-per-line covers DICT pairs + positional tuples too; INLINE single-use trivial helpers; doc-compression FLOOR (~3-8% on lean files, can't trim 20% without cutting points, levers = de-CAPS + filler + cross-docstring restatement); README cocoa-style = numbered nested TOC + per-file appendices + ASCII flow diagrams (user loves the diagrams)."
 metadata:
   node_type: memory
   type: feedback
@@ -91,6 +91,55 @@ students will read the documentation". Six rules:
 12. **Comment math as an explicit display formula with named symbols** -- the user
     called `pred = base * (1 + net_output)` (then defining base / net_output)
     "already more didactics" than prose; put the equation on its own `#   ...` line.
+
+## More conventions (ADDED 2026-07-01)
+
+13. **No comprehensions in non-performance-critical code -- use explicit C-style
+    loops.** The user is "a C coder at heart": a list/dict/set/generator
+    comprehension or a step-slice (`activations[g::P]`, a strided walk) reads
+    harder than `for ... append`. Convert ALL non-hot ones to explicit loops --
+    even trivial inits (`[[] for _ in range(n)]`), the slice ones, the nested
+    ones, and the `(decay if c else no_decay).append(p)` conditional-target trick
+    (-> plain `if/else`). KEEP the vectorized numpy/torch math exactly (the
+    optimization-critical part): `einsum`, `@`, fancy indexing `x[:, idx]`,
+    broadcasting, `.mean(0)`/`.sum(0)`, the numpy `[::-1]` reverse, and ANYTHING
+    inside a `forward()` or a per-batch loop -- turning those into Python loops
+    wrecks performance. Find them with an AST scan (`ast.ListComp`/`SetComp`/
+    `DictComp`/`GeneratorExp`), NOT a grep: a multi-line comprehension (its `for`
+    on a continuation line) slips a line-based grep.
+
+14. **Paren-alignment is one item per line for EVERY wrapped multi-item
+    structure**, not only call args: function arguments, DICT key-value pairs, AND
+    positional tuple/list elements, each on its own line aligned under the opening
+    bracket. (The user flagged the `meta={...}` dict pairs and the `args=(...)`
+    tuple separately before it stuck.)
+
+15. **Inline a single-use trivial helper rather than wrap it in a function.** A
+    driver's serial path (`_run_serial`), a short body called once, is inlined
+    into its `if n_workers <= 1:` branch and the function dropped; the substantial
+    helpers (`_run_parallel`) stay functions. Needless indirection is a smell.
+
+16. **The didactic house style has a doc-compression FLOOR.** Asked to trim docs
+    ~20%, a uniform tightening pass bottoms out at ~3-8% on the lean modules
+    (formal Arguments blocks, one fact per sentence, no filler) and only ~15-20%
+    on comment-heavy driver HEADERS; you CANNOT shed 20% by tightening without
+    deleting teaching points. The levers, in order: kill ALL-CAPS emphasis (->
+    phrasing), cut filler ("note that"/"in other words"/"the reason is that"/"so
+    that"), and -- the biggest -- collapse CROSS-DOCSTRING restatements (a
+    docstring that re-derives what a sibling docstring already states -> point to
+    it). Verify a trim touched only comments/docstrings with a token-stream or
+    AST-minus-docstrings diff. Report the honest achieved % rather than gut content
+    to hit a number.
+
+17. **README style (cocoa-like).** A numbered + nested Table of Contents with
+    anchor links at the top; per-file APPENDICES at the end (a one-liner index of
+    every function/class/method, with `<a name>` anchors); and ASCII FLOW DIAGRAMS
+    -- vertical `|` / down-arrow / `->` boxes with the responsible FILE named on
+    each arrow. The user LOVES the diagrams ("I LOVE IT - use more"); use them for
+    the pipeline, the orchestration (experiment -> the N drivers), the memory
+    tiers (dump -> subset -> the 3 loader regimes), and an architecture (ResCNN
+    trunk + W_fd/W_df). Lean on the tree + tables + diagrams; do not write
+    "insanely verbose ... the type of thing only AI can read".
 
 **Gotcha:** keep `*args` FORWARDERS positional. Keywording `pred=`/`target=`
 BEFORE a `*args` (e.g. `super().loss(pred, target, *args, **kwargs)`) makes a

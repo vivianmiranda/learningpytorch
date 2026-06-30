@@ -1,14 +1,13 @@
 """Model diagnostics over a validation set.
 
-This module provides three post-training analyses that say why the metric
-sits where it does (each returns a dict the plotting reads).
-coverage_diagnostic asks whether the failing val points sit in sparse
-regions of the training set (a kNN-distance vs delta-chi2 correlation,
-i.e. data coverage). local_linear_floor compares the model to a
-local-linear interpolation of the training targets (the data-only floor;
-plain chi2 only). hard_direction_regression fits log10 delta-chi2 against
-the (log) parameters to find which combination predicts the per-point
-hardness.
+Three post-training analyses that say why the metric sits where it does
+(each returns a dict the plotting reads). coverage_diagnostic asks whether
+the failing val points sit in sparse regions of the training set (a
+kNN-distance vs delta-chi2 correlation, i.e. data coverage).
+local_linear_floor compares the model to a local-linear interpolation of
+the training targets (the data-only floor; plain chi2 only).
+hard_direction_regression fits log10 delta-chi2 against the (log)
+parameters to find which combination predicts the per-point hardness.
 """
 
 import numpy as np
@@ -22,29 +21,29 @@ from .training import eval_source_chi2
 def coverage_diagnostic(model, param_geometry, chi2fn, train_set,
                         val_set, device, k_nn=8, bs=256):
   """
-  Do the FAILING val points sit in SPARSE regions of training?
+  Do the failing val points sit in sparse regions of training?
 
   For each validation cosmology, measure its mean distance to the
-  k nearest TRAINING cosmologies in WHITENED (param_geometry)
-  parameter space -- where a Euclidean distance weights every
-  direction by its prior spread, so no single wide param dominates
-  -- and relate that local sparsity to the per-point delta-chi2. A
-  positive rank correlation (and sparser neighbourhoods around the
-  failures) means the floor is data COVERAGE, not the model. The
-  diagnostic is model-agnostic: any trained model works.
+  k nearest training cosmologies in whitened (param_geometry)
+  parameter space -- Euclidean distance there weights each direction
+  by its prior spread, so no single wide param dominates -- and
+  relate that local sparsity to the per-point delta-chi2. A positive
+  rank correlation (sparser neighbourhoods at the failures) means
+  the floor is data coverage, not the model. Model-agnostic: any
+  trained model works.
 
   Arguments:
-    model          = the trained network (eval_source_chi2 sets it
-                     to eval mode).
+    model          = the trained network (eval_source_chi2 sets
+                     eval mode).
     param_geometry = ParamGeometry; .encode whitens the raw params
-                     so the kNN distance is in the decorrelated,
-                     unit-variance metric.
-    chi2fn         = the loss/geometry wrapper used in training
-                     (plain or rescaled); scores the val dchi2.
+                     to the decorrelated, unit-variance metric the
+                     kNN distance uses.
+    chi2fn         = the loss/geometry wrapper (plain or rescaled);
+                     scores the val dchi2.
     train_set      = training source dict; its used rows are the
                      interpolation anchors (the training cloud).
     val_set        = validation source dict (the points scored).
-    device         = device the model lives on.
+    device         = device the model is on.
     k_nn           = neighbours averaged for the local-density
                      estimate (default 8).
     bs             = forward batch size for the dchi2 scoring.
@@ -59,11 +58,10 @@ def coverage_diagnostic(model, param_geometry, chi2fn, train_set,
                   dchi2<=0.2 / dchi2>0.2 populations.
       frac_dense / frac_sparse = frac>0.2 in the densest / sparsest
                   knn_dist decile.
-      coverage_limited = bool verdict (failures sit in sparse
-                  regions: median_bad > median_good and
-                  spearman > 0.1).
+      coverage_limited = bool verdict (failures in sparse regions:
+                  median_bad > median_good, spearman > 0.1).
   """
-  # per-val delta-chi2 from the trained model (sorted-idx order).
+  # per-val delta-chi2 from the model (sorted-idx order).
   _, dchi2 = eval_source_chi2(model=model,
                               param_geometry=param_geometry,
                               chi2fn=chi2fn,
@@ -72,7 +70,7 @@ def coverage_diagnostic(model, param_geometry, chi2fn, train_set,
                               bs=bs)
 
   # whitened params: the training cloud (anchors) and the val
-  # points. encode decorrelates + unit-scales, so a Euclidean
+  # points. encode decorrelates + unit-scales, so Euclidean
   # distance weights every direction by its prior spread.
   tr_rows = np.sort(np.unique(train_set["idx"]))
   va_rows = np.sort(val_set["idx"])
@@ -86,13 +84,13 @@ def coverage_diagnostic(model, param_geometry, chi2fn, train_set,
 
   # mean distance from each val point to its k nearest training
   # points -- a local sparsity measure (large = under-covered).
-  # cKDTree.query returns (distances, indices); we keep distances.
+  # cKDTree.query returns (distances, indices); keep distances.
   tree = cKDTree(Xtr)
   dists, _ = tree.query(Xva, k=k_nn)     # (Nval, k_nn)
   knn_dist = dists.mean(1)               # (Nval,)
 
-  # quantify. log10 dchi2 (floored so a near-zero stays finite) is
-  # robust to the heavy tail; spearman is the rank correlation.
+  # quantify. log10 dchi2 (floored so a near-zero stays finite)
+  # tames the heavy tail; spearman is the rank correlation.
   y = np.log10(np.maximum(dchi2, 1e-4))
   rho, _ = spearmanr(knn_dist, y)
   bad = dchi2 > 0.2
@@ -113,21 +111,21 @@ def coverage_diagnostic(model, param_geometry, chi2fn, train_set,
 def local_linear_floor(model, param_geometry, chi2fn, train_set,
                        val_set, device, k_nn=40, bs=256):
   """
-  The data-only floor: a LOCAL LINEAR map vs the trained model.
+  The data-only floor: a local linear map vs the trained model.
 
   For each val point, fit a local linear map params -> whitened
-  target over its k nearest TRAINING points and predict the val
-  target; the chi2 of that prediction is the best a smooth local
-  method extracts from the data. A linear fit is exact for a
-  locally-linear map, so its error is the LOCAL NONLINEARITY
-  (hardness) plus residual coverage. Comparing the fractions:
+  target over its k nearest training points and predict the val
+  target; that prediction's chi2 is the best a smooth local method
+  extracts from the data. A linear fit is exact for a locally-linear
+  map, so its error is the local nonlinearity (hardness) plus
+  residual coverage. Comparing the fractions:
     f_model ~ f_floor  -> data / representation-limited (the net is
                           at what the data supports; lever = prior /
                           features / more N).
     f_model >> f_floor -> the net has headroom (arch / training).
-  f_floor in the best-covered (densest) decile = pure HARDNESS.
+  f_floor in the best-covered (densest) decile = pure hardness.
 
-  ONLY valid for a plain CosmolikeChi2 (needs_params == False): the
+  Valid only for a plain CosmolikeChi2 (needs_params == False): the
   fit lives in the whitened target space chi2fn.encode(dv) builds,
   and a rescaled encode/chi2 would need each point's own R.
 
@@ -135,10 +133,10 @@ def local_linear_floor(model, param_geometry, chi2fn, train_set,
     model          = the trained network (for the model dchi2).
     param_geometry = ParamGeometry; .encode whitens the params
                      (the kNN space) and chi2fn.encode the targets.
-    chi2fn         = a PLAIN CosmolikeChi2 (raises otherwise).
+    chi2fn         = a plain CosmolikeChi2 (raises otherwise).
     train_set      = training source dict (the fit anchors).
     val_set        = validation source dict (the points scored).
-    device         = device the model lives on.
+    device         = device the model is on.
     k_nn           = neighbours for the local linear fit (default
                      40; must exceed n_param + 1).
     bs             = forward batch size for the model dchi2.
@@ -164,21 +162,20 @@ def local_linear_floor(model, param_geometry, chi2fn, train_set,
     Tva = chi2fn.encode(torch.from_numpy(
       np.asarray(val_set["dv"][va_rows])).float().to(device))
 
-  # k nearest TRAINING neighbours of each val point (param space).
+  # k nearest training neighbours of each val point (param space).
   tree = cKDTree(Xtr.cpu().numpy())
   knn_d, nbr = tree.query(Xva.cpu().numpy(), k=k_nn)
   knn_dist = knn_d.mean(1)                        # coverage scalar
   nbr = torch.from_numpy(nbr).to(device)
 
   # local linear fit: target ~ b + A (x - x_val) over the
-  # neighbours; the prediction at the val point is the intercept b.
+  # neighbours, with intercept b = the prediction at x_val.
   # Solve on CPU (batched lstsq is not on MPS) -- one-time.
   Xn = Xtr[nbr]                                   # (Nval, k, n_param)
   Yn = Ttr[nbr]                                   # (Nval, k, out_dim)
   dX = (Xn - Xva[:, None, :]).cpu()
   ones = torch.ones(dX.shape[0], dX.shape[1], 1)
-  # design = [1, (x - x_val)] so column 0's coefficient is the
-  # intercept b = the prediction at x_val itself.
+  # design = [1, (x - x_val)], so column 0's coefficient is b.
   design = torch.cat([ones, dX], dim=-1)          # (Nval, k, n_p+1)
   coef = torch.linalg.lstsq(design, Yn.cpu()).solution
   Tlin = coef[:, 0, :].to(device)                 # intercept = pred
@@ -202,26 +199,25 @@ def local_linear_floor(model, param_geometry, chi2fn, train_set,
 def hard_direction_regression(model, param_geometry, chi2fn,
                               val_set, device, bs=256, log_set=None):
   """
-  Which LOG-param combination predicts the per-point hardness?
+  Which log-param combination predicts the per-point hardness?
 
-  Fits log10 dchi2 ~ c0 + sum_i c_i z_i, with z_i = STANDARDIZED
-  ln(param / median) for the positive, multiplicative cosmological
+  Fits log10 dchi2 ~ c0 + sum_i c_i z_i, with z_i = standardized
+  ln(param / median) for the positive multiplicative cosmological
   params and standardized centered-linear for the additive
   nuisances (photo-z DZ, IA A1 -- which can be <= 0). Reports each
   feature's univariate correlation (a collinearity-robust ranking),
   the joint OLS coefficients (the alpha, beta, ... combination) and
-  the joint R^2 (how much of the difficulty is a clean log-linear
-  direction), and the ln(omega_b h^2)-ALONE R^2 (does it collapse
-  to that single physical-baryon direction?). Works for any chi2fn
-  -- the dchi2 comes from eval_source_chi2, which handles the
-  param-aware path.
+  joint R^2 (how much of the difficulty is a clean log-linear
+  direction), and the ln(omega_b h^2)-alone R^2 (does it collapse
+  to that single physical-baryon direction?). Works for any chi2fn:
+  the dchi2 comes from eval_source_chi2's param-aware path.
 
   Arguments:
     model          = the trained network.
     param_geometry = ParamGeometry; .names gives the column order.
     chi2fn         = the loss/geometry wrapper (plain or rescaled).
     val_set        = validation source dict (the points scored).
-    device         = device the model lives on.
+    device         = device the model is on.
     bs             = forward batch size for the dchi2 scoring.
     log_set        = parameter names ln-transformed before
                      standardizing (default the positive
@@ -244,7 +240,7 @@ def hard_direction_regression(model, param_geometry, chi2fn,
 
   # ln(param/median) for the positive multiplicative params;
   # centered-linear for the additive nuisances. Standardize so the
-  # coefficients are directly comparable.
+  # coefficients are comparable.
   feat, lab = [], []
   for j, nm in enumerate(names):
     x = params[:, j].astype("float64")
@@ -253,16 +249,18 @@ def hard_direction_regression(model, param_geometry, chi2fn,
     lab.append(("ln " if nm in log_set else "") + nm)
   feat = np.column_stack(feat)
 
-  # univariate (collinearity-robust): each feature's own correlation
-  # with log10 dchi2.
-  uni = np.array([np.corrcoef(feat[:, j], y)[0, 1]
-                  for j in range(feat.shape[1])])
+  # univariate (collinearity-robust): each feature's own
+  # correlation with log10 dchi2.
+  uni_vals = []
+  for j in range(feat.shape[1]):
+    uni_vals.append(np.corrcoef(feat[:, j], y)[0, 1])
+  uni = np.array(uni_vals)
   # joint OLS (a column of 1s is the intercept) and its R^2.
   Z = np.column_stack([np.ones_like(y), feat])
   coef, *_ = np.linalg.lstsq(Z, y, rcond=None)
   r2 = 1.0 - np.var(y - Z @ coef) / np.var(y)
 
-  # does it collapse to ONE direction, ln(omega_b h^2)?
+  # does it collapse to a single direction, ln(omega_b h^2)?
   ob = params[:, names.index("omegab")].astype("float64")
   h  = params[:, names.index("H0")].astype("float64") / 100.0
   g  = np.log(ob * h ** 2 / np.median(ob * h ** 2))

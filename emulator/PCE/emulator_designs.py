@@ -9,9 +9,9 @@ import torch.nn as nn
 def _pce_deg_tuples(m, pq, q):
   """Degree tuples (len m, each >=1) with sum a_i^q <= pq.
 
-  Recursive enumeration with q-norm pruning: extend the
-  tuple one dim at a time, abandoning a branch the moment
-  its running sum of a_i^q exceeds the budget pq.
+  Recursive enumeration with q-norm pruning: extend the tuple one
+  dim at a time, abandoning a branch once its running sum of a_i^q
+  exceeds the budget pq.
   """
   def rec(prefix, used):
     if len(prefix) == m:
@@ -29,43 +29,41 @@ def pce_multi_index(n_dim, p_max=12, r_max=3, q=0.6):
   Sparse candidate multi-index set A_cand (eq 11).
 
   Every multi-index alpha = (a_1, ..., a_n_dim) of per-variable
-  degrees a_i >= 0 passes BOTH rules of the hybrid hyperbolic /
-  max-interaction truncation:
+  degrees a_i >= 0 passes both rules of the hybrid truncation:
     - hyperbolic q-norm:  (sum_i a_i^q)^(1/q) <= p_max
     - max interaction:    #(a_i != 0)          <= r_max
   The all-zero index (the constant) is row 0.
 
-  The q-norm sets how a degree SPREAD over many variables is
-  scored against one CONCENTRATED in a single variable. Worked
-  example with p_max = 4, three terms of total degree 4:
+  The q-norm scores a degree spread over many variables against one
+  concentrated in a single variable. Worked example with p_max = 4,
+  three terms of total degree 4:
     term          q = 1        q = 0.5
     x1^4          4  -> keep    4  -> keep
     x1^2 x2^2     4  -> keep    8  -> drop
     x1 x2 x3 x4   4  -> keep    16 -> drop
-  At q = 1 the norm is the plain total degree (the sum of the
-  per-variable degrees), so a 4-way interaction counts the same
-  as one degree-4 variable. At q < 1 spreading a degree over k
-  variables costs k^(1/q) instead of k (the two- and four-
-  variable terms above score 8 and 16, both past p_max = 4), so
-  high-interaction cross-terms are dropped first -- the
-  sparsity-of-effects prior. Smaller q = sparser basis.
+  At q = 1 the norm is the plain total degree, so a 4-way
+  interaction counts as one degree-4 variable. At q < 1 spreading a
+  degree over k variables costs k^(1/q) instead of k (the two- and
+  four-variable terms score 8 and 16, past p_max = 4), dropping
+  high-interaction cross-terms first -- the sparsity-of-effects
+  prior. Smaller q = sparser basis.
 
   Arguments:
     n_dim = number of input parameters (here 12).
-    p_max = maximum total degree (the q-norm bound); the
-            SMOOTHNESS knob (low = smooth, high = Runge risk).
-    r_max = maximum interaction order = the most variables
-            allowed together in one term (#(a_i != 0) <= r_max).
-    q     = hyperbolic-norm exponent in (0, 1]; the SPARSITY
-            knob (q=1 = plain total degree; smaller q drops
+    p_max = maximum total degree (the q-norm bound); the smoothness
+            knob (low = smooth, high = Runge risk).
+    r_max = maximum interaction order = most variables allowed
+            together in one term (#(a_i != 0) <= r_max).
+    q     = hyperbolic-norm exponent in (0, 1]; the sparsity knob
+            (q=1 = plain total degree; smaller drops
             high-interaction terms -> sparser; see above).
   Returns:
     multi_index = (n_terms, n_dim) int array, row 0 constant.
   """
   pq   = p_max ** q
   rows = [np.zeros(n_dim, dtype=int)]      # constant term
-  # every active subset of size 1..r_max, with all degree
-  # tuples (>=1 on those dims) under the q-norm budget.
+  # every active subset of size 1..r_max, with all degree tuples
+  # (>=1 on those dims) under the q-norm budget.
   for m in range(1, r_max + 1):
     for dims in itertools.combinations(range(n_dim), m):
       for degs in _pce_deg_tuples(m=m, pq=pq, q=q):
@@ -82,12 +80,12 @@ def pce_design(Xm, multi_index):
 
     Psi[n,t] = prod_l sqrt(2 a_{t,l}+1) * P_{a_{t,l}}(Xm[n,l])
 
-  P = Legendre polynomial (orthogonal on [-1,1]); the
-  sqrt(2a+1) factor makes each 1-D factor orthoNORMAL.
-  Legendre values come from the three-term recurrence
+  P = Legendre polynomial (orthogonal on [-1,1]); the sqrt(2a+1)
+  factor makes each 1-D factor orthonormal. Legendre values from the
+  three-term recurrence
     (n+1) P_{n+1} = (2n+1) x P_n - n P_{n-1}, P_0=1, P_1=x.
-  Pure torch, so one implementation runs on CPU (the fit) and
-  on the GPU (predict).
+  Pure torch, so one implementation runs on CPU (fit) and GPU
+  (predict).
 
   Arguments:
     Xm          = (N, n_dim) inputs mapped to [-1, 1].
@@ -117,18 +115,18 @@ def pce_design(Xm, multi_index):
 
 def select_lars_loo(Psi, y, max_terms=150, patience=10):
   """
-  Greedy least-angle / OMP selection with a leave-one-out
-  (LOO) stop -- the self-contained stand-in for UQLab's
-  LARS+LOO sparse-PCE selection.
+  Greedy least-angle / OMP selection with a leave-one-out (LOO)
+  stop -- the self-contained stand-in for UQLab's LARS+LOO sparse-
+  PCE selection.
 
   Returns:
     support = int array of selected column indices.
     coef    = OLS coefficients aligned with `support`.
     loo     = relative leave-one-out MSE at the chosen model
               = mean((y - y_pred)^2 leave-one-out) / var(y)
-              = 1 - R^2_LOO. 0 = perfect, 1 = no better than
-              predicting the mean; sqrt(loo) = typical error
-              as a fraction of y's spread.
+              = 1 - R^2_LOO. 0 = perfect, 1 = no better than the
+              mean; sqrt(loo) = typical error as a fraction of y's
+              spread.
   """
   cn = np.sqrt((Psi ** 2).sum(0)) + 1e-30    # column norms
   vy = np.var(y) + 1e-30                      # target variance
@@ -145,21 +143,17 @@ def select_lars_loo(Psi, y, max_terms=150, patience=10):
     beta = Ginv @ (A.T @ y)
     resid = y - A @ beta                      # in-sample resid
 
-    # hat = leverage h_nn = diag of A (A^T A)^-1 A^T. It is how
-    # much point n pulls its own fit; near 1 = high influence.
+    # hat = leverage h_nn = diag of A (A^T A)^-1 A^T: how much
+    # point n pulls its own fit; near 1 = high influence.
     hat = np.einsum("ni,ij,nj->n", A, Ginv, A)
     hat = np.minimum(hat, 1.0 - 1e-6)
-    # LOO (generalization) error of this fit, WITHOUT refitting:
-    #   resid / (1 - hat) = point n's residual when n is DROPPED
-    #     from the fit (the PRESS shortcut; dividing by 1 - h_nn
-    #     inflates the in-sample residual to its leave-one-out
-    #     value).
-    #   / vy normalizes by the target's variance, so loo is
+    # LOO (generalization) error without refitting:
+    #   resid / (1 - hat) = point n's residual when n is dropped
+    #     from the fit (the PRESS shortcut; 1/(1 - h_nn) inflates the
+    #     in-sample residual to its leave-one-out value).
+    #   / vy normalizes by the target variance, so loo is
     #     dimensionless and comparable across modes:
-    #       loo = mean(LOO residual^2) / var(y) = 1 - R^2_LOO
-    #       0   -> perfect prediction
-    #       1   -> no better than guessing the mean
-    #       sqrt(loo) -> typical error in units of y's spread
+    #       loo = mean(LOO residual^2) / var(y) = 1 - R^2_LOO.
     #   The absolute chi2 a mode adds is loo * var(mode), so a
     #   high-variance mode must reach a very small loo to help.
     loo = np.mean((resid / (1.0 - hat)) ** 2) / vy
@@ -173,8 +167,8 @@ def select_lars_loo(Psi, y, max_terms=150, patience=10):
     if since >= patience or len(active) >= max_terms:
       break
 
-    # next term: candidate column most correlated with the
-    # residual (scaled by its norm); never re-pick an active one.
+    # next term: candidate column most correlated with the residual
+    # (scaled by its norm); never re-pick an active one.
     score = np.abs(Psi.T @ resid) / cn
     score[active] = -1.0
     active.append(int(np.argmax(score)))
@@ -184,73 +178,65 @@ def select_lars_loo(Psi, y, max_terms=150, patience=10):
 
 class PCEEmulator(nn.Module):
   """
-  Sparse-Legendre Polynomial Chaos Expansion (PCE) emulator --
-  the analytic "base" of the NPCE (Neural PCE). It maps the
-  cosmological parameters to the whitened data vector with NO
-  network and NO gradient descent: every coefficient is a
-  closed-form least-squares fit, so the whole emulator is built
-  in a single pass over the training set.
+  Sparse-Legendre Polynomial Chaos Expansion (PCE) emulator -- the
+  analytic "base" of the NPCE (Neural PCE). It maps the cosmological
+  parameters to the whitened data vector with no network: every
+  coefficient is a closed-form least-squares fit, built in one pass
+  over the training set.
 
-  A "polynomial chaos expansion" writes a quantity as a sum of
+  A polynomial chaos expansion writes a quantity as a sum of
   orthogonal polynomials of the inputs. Here (eqs 9-11) each
-  compressed dv coefficient lambda_i is expanded in NORMALIZED
-  LEGENDRE polynomials of the 12 parameters mapped to [-1, 1]:
+  compressed dv coefficient lambda_i is expanded in normalized
+  Legendre polynomials of the 12 parameters mapped to [-1, 1]:
     lambda_i(theta) ~ sum_alpha eta_{i,alpha} Psi_alpha(x)
-  where Psi_alpha is a product of 1-D Legendre polynomials
-  (eq 10) and alpha runs over a SPARSE set of multi-indices set
-  by a hyperbolic q-norm + max-interaction truncation, then
-  pruned by LARS with a leave-one-out criterion (eq 11).
-  "Sparse" = only a handful of candidate terms survive (the
-  sparsity-of-effects principle), which is what makes the fit
-  data-efficient and resistant to overfitting.
+  Psi_alpha is a product of 1-D Legendre polynomials (eq 10) and
+  alpha runs over a sparse multi-index set from a hyperbolic q-norm
+  + max-interaction truncation, pruned by LARS with a leave-one-out
+  criterion (eq 11). Sparse = only a handful of terms survive
+  (sparsity-of-effects), making the fit data-efficient and
+  overfit-resistant.
 
-  What the lambda_i ARE here: the dv targets are first
-  covariance-WHITENED (geom.encode), then ensemble-centered and
-  SVD-compressed to the K leading modes; those K mode amplitudes
-  are the lambda_i (eq-9 principal-component amplitudes).
-  Compressing in the WHITENED basis is deliberate -- that basis
-  IS the chi2 metric (chi2 == ||.||^2) -- so (a) the
-  least-squares PCE on each mode directly minimizes the expected
-  chi2, and (b) dropping a mode costs its singular-value^2 / N
-  in MEAN chi2: the truncation error is bounded in the metric we
-  actually report.
+  What the lambda_i are: the dv targets are covariance-whitened
+  (geom.encode), ensemble-centered, and SVD-compressed to K leading
+  modes; those K amplitudes are the lambda_i (eq-9
+  principal-component amplitudes). Compressing in the whitened basis
+  is deliberate -- that basis is the chi2 metric (chi2 == ||.||^2)
+  -- so (a) the least-squares PCE on each mode directly minimizes
+  the expected chi2, and (b) dropping a mode costs its
+  singular-value^2 / N in mean chi2, bounding the truncation error
+  in the reported metric.
 
-  Two design rules, each learned the hard way (see the NPCE
-  notes):
-    - KEEP ONLY WELL-PREDICTED MODES. Mode 0 (the overall
-      amplitude, ~A_s/S_8 scaling) is a smooth, cleanly
-      polynomial-predictable direction; the higher "shape"
-      modes often are not. A mode kept with a poor fit injects
-      more error into the base than it removes, so only modes
-      with relative LOO < loo_max enter the base; the rest are
-      left to the NPCE refiner, which corrects the FULL dv and
+  Two design rules, learned the hard way (see the NPCE notes):
+    - Keep only well-predicted modes. Mode 0 (the overall amplitude,
+      ~A_s/S_8 scaling) is smooth and cleanly polynomial-
+      predictable; the higher "shape" modes often are not. A mode
+      kept with a poor fit injects more error than it removes, so
+      only modes with relative LOO < loo_max enter the base; the
+      rest go to the NPCE refiner, which corrects the full dv and
       backstops everything dropped.
-    - KEEP THE DEGREE LOW. A high-degree Legendre fit Runge-
-      oscillates, and subtracting a wiggly base makes the
-      refiner's residual HARDER, not easier. Degree (p_max) is
-      the smoothness knob; term count (max_terms) only adds
-      richness WITHIN that degree -- so max_terms is set
-      generous and the LOO, not the cap, decides each mode's
-      term count.
+    - Keep the degree low. A high-degree Legendre fit Runge-
+      oscillates, and subtracting a wiggly base makes the refiner's
+      residual harder. Degree (p_max) is the smoothness knob; term
+      count (max_terms) only adds richness within that degree -- so
+      max_terms is generous and the LOO, not the cap, decides each
+      mode's term count.
 
-  Used as a drop-in model(X) -> whitened dv: X is the
-  pgeom-whitened parameter batch (the same input the SGD models
-  see); forward maps it to [-1, 1], evaluates the Legendre
-  design, applies the coefficient matrix to get the K mode
-  amplitudes, and reconstructs the whitened dv from the SVD
-  basis. Build it with the from_training classmethod and wrap it
-  as the base of an NPCE loss (PCEResidualChi2 = additive,
-  PCERatioChi2 = multiplicative).
+  Drop-in model(X) -> whitened dv: X is the pgeom-whitened parameter
+  batch (the input the SGD models see); forward maps it to [-1, 1],
+  evaluates the Legendre design, applies the coefficient matrix for
+  the K amplitudes, and reconstructs the whitened dv from the SVD
+  basis. Build with the from_training classmethod and wrap as the
+  base of an NPCE loss (PCEResidualChi2 = additive, PCERatioChi2 =
+  multiplicative).
 
   Buffers (frozen; move with .to(device), never trained):
     lo, hi      = per-parameter [-1, 1] box-map bounds.
     multi_index = (n_terms, n_dim) Legendre degree exponents.
-    C           = (n_terms, K) sparse coefficient matrix (zero
-                  off each mode's selected support).
+    C           = (n_terms, K) sparse coefficient matrix (zero off
+                  each mode's support).
     Vk          = (n_keep, K) leading SVD modes the amplitudes
                   reconstruct against.
-    Ybar        = (n_keep,) training-ensemble mean of the
-                  whitened dv.
+    Ybar        = (n_keep,) training-ensemble mean of the whitened dv.
   """
 
   def __init__(self, lo, hi, multi_index, C, Vk, Ybar):
@@ -276,17 +262,15 @@ class PCEEmulator(nn.Module):
       Y_white  = (N, n_keep) covariance-whitened targets.
       p_max    = max total degree (smoothness knob); low (3-6).
       r_max    = max interaction order (vars per term).
-      q        = sparsity exponent in (0,1] (q=1 = total
-                 degree; smaller = sparser; worked example in
-                 pce_multi_index).
-      k_max    = max leading SVD modes to TRY.
+      q        = sparsity exponent in (0,1] (q=1 = total degree;
+                 smaller = sparser; example in pce_multi_index).
+      k_max    = max leading SVD modes to try.
       loo_max  = keep a mode only if its relative LOO < this.
       max_terms = per-mode active-set cap.
-      max_fail = stop trying more modes after this many
-                 CONSECUTIVE gate failures (leading modes are
-                 the predictable ones, so a run of misses means
-                 the rest miss too -- avoids fitting modes that
-                 will only be dropped).
+      max_fail = stop after this many consecutive gate failures
+                 (leading modes are the predictable ones, so a run
+                 of misses means the rest miss too -- avoids fitting
+                 modes that will only be dropped).
       silent   = suppress the fit report.
     Returns:
       a fitted PCEEmulator on `device`.
@@ -312,8 +296,7 @@ class PCEEmulator(nn.Module):
     var = S ** 2
 
     # fit leading modes; keep the well-predicted ones (loo <
-    # loo_max). Stop after max_fail CONSECUTIVE misses so we do
-    # not fit dozens of modes only to drop them.
+    # loo_max). Stop after max_fail consecutive misses.
     kfit = min(k_max, len(S))
     cols, kept, loos, all_loo = [], [], [], []
     fails = 0
@@ -346,7 +329,10 @@ class PCEEmulator(nn.Module):
 
     if not silent:
       act   = (C != 0).sum(0)
-      tried = ", ".join(f"{l:.2e}" for l in all_loo[:8])
+      tried_vals = []
+      for l in all_loo[:8]:
+        tried_vals.append(f"{l:.2e}")
+      tried = ", ".join(tried_vals)
       print(f"PCE fit: N {N}  n_dim {n_dim}  "
             f"candidates {Psi.shape[1]}  fit {len(all_loo)}")
       print(f"  KEPT {K} (loo<{loo_max})  "

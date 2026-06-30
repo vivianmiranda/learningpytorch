@@ -12,8 +12,8 @@ class GroupedActivation(nn.Module):
   """
   def __init__(self, n_groups, dim):
     super().__init__()
-    # gamma/beta init to 0 (as in activation_fcn), shape
-    # (G, 1, dim) so they broadcast over the B axis.
+    # gamma/beta init to 0 (as in activation_fcn), shape (G, 1, dim)
+    # to broadcast over the B axis.
     self.gamma = nn.Parameter(torch.zeros(n_groups, 1, dim))
     self.beta  = nn.Parameter(torch.zeros(n_groups, 1, dim))
 
