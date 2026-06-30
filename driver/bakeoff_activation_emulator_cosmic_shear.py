@@ -13,7 +13,9 @@
 # complexity) where others flatten, not a single-N offset.
 #
 #     python driver/bakeoff_activation_emulator_cosmic_shear.py \
-#       --yaml driver/train_single_emulator_cosmic_shear.yaml \
+#       --root projects/lsst_y1/ \
+#       --fileroot emulators/nla_cosmic_shear/ \
+#       --yaml test.yaml \
 #       --n-min 2000 --n-points 6 --out bakeoff_act
 #
 #- Per N_train (geometric grid [--n-min .. --n-max], --n-max defaults to the
@@ -29,7 +31,9 @@
 #  activations, 8 GPUs, 4 idle. With --n-gpus 4:
 #
 #     python driver/bakeoff_activation_emulator_cosmic_shear.py \
-#       --yaml driver/train_single_emulator_cosmic_shear.yaml \
+#       --root projects/lsst_y1/ \
+#       --fileroot emulators/nla_cosmic_shear/ \
+#       --yaml test.yaml \
 #       --n-points 8 --n-gpus 4 --out bakeoff_act
 #
 #  One GPU (or none, e.g. the Apple-MPS dev machine) runs the serial double
@@ -39,7 +43,12 @@
 #  train_args.model.name, rest of train_args). The YAML activation and usual
 #  --activation flag are ignored; this driver sweeps it.
 #
-#- `--yaml` (required): config (data + train_args), training-driver schema.
+#- `--root` (required): project folder under $ROOTDIR (data resolves under it);
+#  `--fileroot` (required): subfolder holding the YAML and curve outputs (e.g.
+#  emulators/nla_cosmic_shear). Cocoa layout, as in the training driver.
+#- `--yaml` (default test.yaml): config under --fileroot (data + train_args),
+#  training-driver schema. The `data` block lists bare filenames, resolved under
+#  --root/chains.
 #- `--activations` (default H,power,multigate,gated_power): comma-separated
 #  subset to bake off.
 #- `--rescale`: analytic-R mode, fixed across the bake-off (as in training).
@@ -49,7 +58,8 @@
 #  5): geometric N_train grid (clamped to the pool, deduplicated).
 #- `--threshold` (default 0.2): delta-chi2 cutoff the fraction counts.
 #- `--out` (default bakeoff_act): writes <out>.txt (every curve + config,
-#  np.loadtxt-loadable, one column per activation) and <out>.pdf (figure).
+#  np.loadtxt-loadable, one column per activation) and <out>.pdf (figure), under
+#  --fileroot.
 #- `--quiet`: suppress stdout (txt and pdf still written).
 #
 #- One full model per (N_train, activation): len(grid) x len(activations)
@@ -64,7 +74,6 @@ import time
 
 import numpy as np
 import torch
-import yaml
 
 # The emulator package sits one directory up from driver/; put the repo root on
 # sys.path so `import emulator` resolves from any working directory (see the
@@ -73,6 +82,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
   sys.path.insert(0, ROOT)
 
+from emulator.cocoa import (
+  add_cocoa_path_args, resolve_cocoa_config, cocoa_output)
 from emulator.experiment import EmulatorExperiment
 from emulator.results import save_learning_curves
 
@@ -238,12 +249,10 @@ def _run_parallel_bakeoff(cfg, sizes, activations, n_workers, args, log):
 def main():
   parser = argparse.ArgumentParser(
     prog="bakeoff_activation_emulator_cosmic_shear")
-  parser.add_argument("--yaml",
-                      dest="yaml",
-                      help="config YAML (data + train_args blocks), "
-                           "same schema as the training driver",
-                      type=str,
-                      required=True)
+  # --root / --fileroot / --yaml: the cocoa project layout (data under
+  # --root, YAML + curve outputs under --fileroot). Same schema as the
+  # training driver.
+  add_cocoa_path_args(parser)
   parser.add_argument("--activations",
                       dest="activations",
                       help="comma-separated activations to bake off, a "
@@ -322,10 +331,11 @@ def main():
   # children inherit it.
   os.environ.setdefault("MPLBACKEND", "Agg")
 
-  # read the config once: parent uses it for the grid and hands each GPU process
-  # a copy (host-RAM budget split across them).
-  with open(args.yaml) as f:
-    cfg = yaml.safe_load(f)
+  # resolve the cocoa layout and read the config once (data paths made
+  # absolute under $ROOTDIR/<root>): parent uses cfg for the grid and hands
+  # each GPU process a copy; absolute paths mean every worker reads the same
+  # files.
+  cfg, fileroot = resolve_cocoa_config(args)
 
   # build the experiment on the compute device (CUDA, or Apple MPS on the dev
   # machine); pool size and model name read off it, serial path reuses it. A GPU
@@ -392,9 +402,10 @@ def main():
                                    log=log)
 
   # save every curve + config as a plain-text table, one column per activation
-  # (np.loadtxt-loadable, # headers skipped).
-  out_txt = args.out + ".txt"
-  out_pdf = args.out + ".pdf"
+  # (np.loadtxt-loadable, # headers skipped). Outputs land under the emulator's
+  # fileroot.
+  out_txt = cocoa_output(fileroot, args.out + ".txt")
+  out_pdf = cocoa_output(fileroot, args.out + ".pdf")
   # turn {activation: {N: frac}} into one column per activation, ordered to
   # match `sizes`, for the table writer.
   columns = {}

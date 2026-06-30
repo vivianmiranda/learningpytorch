@@ -10,7 +10,9 @@
 # architecture-limited (a flat tail).
 #
 #     python driver/sweep_ntrain_emulator_cosmic_shear.py \
-#       --yaml driver/train_single_emulator_cosmic_shear.yaml \
+#       --root projects/lsst_y1/ \
+#       --fileroot emulators/nla_cosmic_shear/ \
+#       --yaml test.yaml \
 #       --n-min 2000 --n-points 6 --out ntrain_resmlp
 #
 #- Reuses the training driver's YAML (and its model/rescale/activation choices).
@@ -32,8 +34,12 @@
 #  One GPU (or none, e.g. the Apple-MPS dev machine) falls back to a serial
 #  loop, so the same script runs everywhere.
 #
-#- `--yaml` (required): config (data + train_args), training-driver schema;
-#  train_args.model.name picks ResMLP / ResCNN.
+#- `--root` (required): project folder under $ROOTDIR (data resolves under it);
+#  `--fileroot` (required): subfolder holding the YAML and curve outputs (e.g.
+#  emulators/nla_cosmic_shear). Cocoa layout, as in the training driver.
+#- `--yaml` (default test.yaml): config under --fileroot (data + train_args),
+#  training-driver schema; train_args.model.name picks ResMLP / ResCNN. The
+#  `data` block lists bare filenames, resolved under --root/chains.
 #- `--rescale` / `--activation`: as in the training driver, fixed across the
 #  sweep (analytic-R mode and ResBlock activation).
 #- `--n-gpus` (default: all visible CUDA devices): GPUs to spread across. 1, or
@@ -42,7 +48,7 @@
 #  5): geometric N_train grid (clamped to the pool, deduplicated).
 #- `--threshold` (default 0.2): delta-chi2 cutoff the fraction counts.
 #- `--out` (default ntrain_sweep): writes <out>.txt (curve + config,
-#  np.loadtxt-loadable) and <out>.pdf (single-curve figure).
+#  np.loadtxt-loadable) and <out>.pdf (single-curve figure), under --fileroot.
 #- `--quiet`: suppress stdout (txt and pdf still written).
 #
 #- Trains one full model per grid point (--n-points trainings, divided across
@@ -56,7 +62,6 @@ import time
 
 import numpy as np
 import torch
-import yaml
 
 # The emulator package sits one directory up from driver/; put the repo root on
 # sys.path so `import emulator` resolves from any working directory (see the
@@ -65,6 +70,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
   sys.path.insert(0, ROOT)
 
+from emulator.cocoa import (
+  add_cocoa_path_args, resolve_cocoa_config, cocoa_output)
 from emulator.experiment import EmulatorExperiment
 from emulator.results import save_learning_curves
 from emulator.scheduling import lpt_assign
@@ -240,12 +247,10 @@ def _run_parallel(cfg, sizes, n_workers, args, log):
 def main():
   parser = argparse.ArgumentParser(
     prog="sweep_ntrain_emulator_cosmic_shear")
-  parser.add_argument("--yaml",
-                      dest="yaml",
-                      help="config YAML (data + train_args blocks), "
-                           "same schema as the training driver",
-                      type=str,
-                      required=True)
+  # --root / --fileroot / --yaml: the cocoa project layout (data under
+  # --root, YAML + curve outputs under --fileroot). Same schema as the
+  # training driver.
+  add_cocoa_path_args(parser)
   parser.add_argument("--rescale",
                       dest="rescale",
                       help="analytic-R rescaling mode, fixed across the "
@@ -309,10 +314,11 @@ def main():
   # so the children inherit it.
   os.environ.setdefault("MPLBACKEND", "Agg")
 
-  # read the config once. The parent uses it for the grid and hands a copy
-  # (host-RAM budget divided across workers) to each GPU process.
-  with open(args.yaml) as f:
-    cfg = yaml.safe_load(f)
+  # resolve the cocoa layout and read the config once (data paths made
+  # absolute under $ROOTDIR/<root>). The parent uses cfg for the grid and
+  # hands a copy (host-RAM budget set for streaming) to each GPU process;
+  # absolute paths mean every spawned worker reads the same files.
+  cfg, fileroot = resolve_cocoa_config(args)
 
   # build the experiment on the real compute device (CUDA, or Apple MPS on the
   # dev machine); pool size and model name are read off it, and the serial path
@@ -377,9 +383,9 @@ def main():
 
   # save the curve + its config as a plain-text table, so several runs (one per
   # architecture / chi2 mode) overlay later (np.loadtxt-loadable; # headers
-  # skipped).
-  out_txt = args.out + ".txt"
-  out_pdf = args.out + ".pdf"
+  # skipped). Outputs land under the emulator's fileroot.
+  out_txt = cocoa_output(fileroot, args.out + ".txt")
+  out_pdf = cocoa_output(fileroot, args.out + ".pdf")
   save_learning_curves(
     path=out_txt,
     sizes=sizes,

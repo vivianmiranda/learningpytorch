@@ -10,29 +10,43 @@
 # inverse covariance).
 #
 #     python driver/train_single_emulator_cosmic_shear.py \
-#       --yaml driver/train_single_emulator_cosmic_shear.yaml \
+#       --root projects/lsst_y1/ \
+#       --fileroot emulators/nla_cosmic_shear/ \
+#       --yaml test.yaml \
 #       --diagnostic diagnostic.pdf
 #
-#- Run where the YAML's relative data paths resolve (e.g. project root with
-#  ./dvs/), with $ROOTDIR exported so cosmolike finds its dataset under
+#- Cocoa layout: export $ROOTDIR, then --root names the project folder under it
+#  ($ROOTDIR/projects/lsst_y1) and --fileroot a subfolder of it holding this
+#  emulator's YAML and outputs ($ROOTDIR/projects/lsst_y1/emulators/
+#  nla_cosmic_shear). The data files (dv / params / covmat) sit under
+#  --root/chains, the YAML and outputs under --fileroot. The driver resolves
+#  every path, so it runs from $ROOTDIR regardless of cwd. cosmolike's own
+#  dataset still resolves under
 #  $ROOTDIR/external_modules/data. cosmolike runs only on the workstation; train
 #  there.
 #
 #- The emulator package (one dir up from driver/) is added to sys.path, so
 #  `import emulator` works from any launch dir.
 #
-#- `--yaml` (required): config holding every hyperparameter (no magic numbers in
-#  code). Two blocks:
-#  - `data`: input paths, cut/split settings (omegabh2_cut, train_divisor,
-#    val_divisor, split_seed, ram_frac), cosmolike dataset (cosmolike_data_dir,
-#    cosmolike_dataset).
+#- `--root` (required): project folder under $ROOTDIR (e.g. projects/lsst_y1);
+#  the data files resolve under --root/chains.
+#- `--fileroot` (required): subfolder of --root holding this emulator's YAML and
+#  outputs (e.g. emulators/nla_cosmic_shear).
+#- `--yaml` (default test.yaml): config file under --fileroot, holding every
+#  hyperparameter (no magic numbers in code). Two blocks:
+#  - `data`: input file names (train_dv, train_params, train_covmat, val_dv,
+#    val_params -- bare filenames, resolved under --root/chains), cut/split
+#    settings (omegabh2_cut, train_divisor, val_divisor, split_seed, ram_frac),
+#    cosmolike dataset (cosmolike_data_dir, cosmolike_dataset; resolved under
+#    $ROOTDIR/external_modules/data, not --root).
 #  - `train_args`: knobs (nepochs, bs, loss_mode, silent) plus sub-blocks model
 #    (name = resmlp | rescnn, then kwargs: int_dim_res, n_blocks, and for rescnn
 #    kernel_size / channels / n_blocks_cnn / gate_init), optimizer (weight_decay),
 #    lr (lr_base, bs_base, warmup_epochs), scheduler (mode, patience, factor),
 #    trim / focus (robustness schedules).
 #
-#- `--diagnostic` (optional): saves a multipage diagnostics PDF here. Page 1
+#- `--diagnostic` (optional): saves a multipage diagnostics PDF under --fileroot
+#  (relative path) or at an absolute path. Page 1
 #  (2x2): training history + coverage (do failures sit in sparse training
 #  regions?). Page 2: local-linear data-only floor (model vs floor delta-chi2;
 #  plain chi2fn only, skipped under --rescale). Page 3: hard-direction regression
@@ -58,7 +72,7 @@
 #  setup for a sweep to reuse). The model is the YAML's choice
 #  (train_args.model.name).
 #
-#- Inputs (paths set in the YAML `data` block):
+#- Inputs (filenames set in the YAML `data` block, resolved under --root/chains):
 #
 #      <train_dv>.npy      training data vectors   (memmapped)
 #      <train_params>.txt  training parameters     (weight, lnp, <params>, chi2)
@@ -70,7 +84,7 @@
 #
 #      stdout            per-epoch progress (unless train_args.silent: true) plus
 #                        a final "best epoch N: frac>0.2 ... median ..." line.
-#      <--diagnostic>    the multipage diagnostics PDF, if the flag is set.
+#      <--diagnostic>    the multipage diagnostics PDF (under --fileroot), if set.
 #-------------------------------------------------------------------------------
 
 import argparse
@@ -85,18 +99,17 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
   sys.path.insert(0, ROOT)
 
+from emulator.cocoa import (
+  add_cocoa_path_args, resolve_cocoa_config, cocoa_output)
 from emulator.experiment import EmulatorExperiment
 
 
 def main():
   parser = argparse.ArgumentParser(
     prog="train_single_emulator_cosmic_shear")
-  parser.add_argument("--yaml",
-                      dest="yaml",
-                      help="training YAML with the data and "
-                           "train_args blocks",
-                      type=str,
-                      required=True)
+  # --root / --fileroot / --yaml: the cocoa project layout (data under
+  # --root, YAML + outputs under --fileroot).
+  add_cocoa_path_args(parser)
   parser.add_argument("--diagnostic",
                       dest="diagnostic",
                       help="if set, save a diagnostics figure (the "
@@ -133,15 +146,21 @@ def main():
                       action="store_true")
   args, unknown = parser.parse_known_args()
 
+  # Resolve the cocoa layout: $ROOTDIR/<root> holds the data, <fileroot>
+  # (under root) holds this emulator's YAML and outputs. Loads the YAML and
+  # rewrites its data paths to absolute, so the run does not depend on the
+  # launch directory.
+  cfg, fileroot = resolve_cocoa_config(args)
+
   # All setup -- config parse + model resolution + device + data staging +
   # geometry + chi2 + spec assembly -- lives in EmulatorExperiment, so a sweep
   # script reuses it rather than copying it. The fixed single-emulator choices
   # are its defaults; the model is the YAML's choice. This driver passes only
-  # what it varies (yaml, rescale, activation, quiet).
-  exp = EmulatorExperiment.from_yaml(args.yaml,
-                                     rescale=args.rescale,
-                                     activation=args.activation,
-                                     quiet=args.quiet)
+  # what it varies (rescale, activation, quiet).
+  exp = EmulatorExperiment.from_config(cfg,
+                                       rescale=args.rescale,
+                                       activation=args.activation,
+                                       quiet=args.quiet)
   # the experiment's quiet-gated logger, reused below
   log = exp.log
   log(f"device: {exp.device}  |  rescale: {exp.rescale}")
@@ -158,6 +177,8 @@ def main():
       f"median {medians[best]:.4f}")
 
   if args.diagnostic is not None:
+    # the diagnostics PDF lands under the emulator's fileroot.
+    diag_path = cocoa_output(fileroot, args.diagnostic)
     # headless output: pick a non-interactive matplotlib backend before pyplot
     # is imported (emulator.plotting imports it at load), then build it.
     os.environ.setdefault("MPLBACKEND", "Agg")
@@ -213,8 +234,8 @@ def main():
                      coverage=cov,
                      floor=floor,
                      hard_dir=hd,
-                     savepath=args.diagnostic)
-    log(f"saved diagnostics -> {args.diagnostic}")
+                     savepath=diag_path)
+    log(f"saved diagnostics -> {diag_path}")
 
 
 if __name__ == "__main__":

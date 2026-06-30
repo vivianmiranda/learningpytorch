@@ -1,15 +1,17 @@
-# Config for train_single_resmlp_emulator_cosmic_shear.py
+# Config for train_single_emulator_cosmic_shear.py
 #
-# File paths are resolved relative to the directory you run the
-# script FROM (or use absolute paths). cosmolike_data_dir /
-# cosmolike_dataset live under $ROOTDIR/external_modules/data.
+# The data files below are bare filenames; the driver resolves them under
+# $ROOTDIR/<--root>/chains (where dataset_generator_lensing.py writes the
+# dvs / params / covmat), so no folder prefix and no dependence on the
+# launch directory. The cosmolike_data_dir / cosmolike_dataset keys are
+# separate: they live under $ROOTDIR/external_modules/data, not under --root.
 
 data:
-  train_dv:     ./dvs/w0wa_takahashi_dvs_train_cs_16.npy
-  train_params: ./dvs/w0wa_takahashi_params_train_cs_16.1.txt
-  train_covmat: ./dvs/w0wa_takahashi_params_train_cs_16.covmat
-  val_dv:       ./dvs/w0wa_takahashi_dvs_train_cs_8.npy
-  val_params:   ./dvs/w0wa_takahashi_params_train_cs_8.1.txt
+  train_dv:     w0wa_takahashi_dvs_train_cs_16.npy
+  train_params: w0wa_takahashi_params_train_cs_16.1.txt
+  train_covmat: w0wa_takahashi_params_train_cs_16.covmat
+  val_dv:       w0wa_takahashi_dvs_train_cs_8.npy
+  val_params:   w0wa_takahashi_params_train_cs_8.1.txt
 
   cosmolike_data_dir: lsst_y1
   cosmolike_dataset:  lsst_y1_M1_GGL0.05.dataset

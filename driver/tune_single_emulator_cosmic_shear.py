@@ -9,7 +9,9 @@
 # minimizing validation f(delta-chi2 > 0.2) rather than one run.
 #
 #     python driver/tune_single_emulator_cosmic_shear.py \
-#       --yaml driver/tune_single_emulator_cosmic_shear.yaml \
+#       --root projects/lsst_y1/ \
+#       --fileroot emulators/nla_cosmic_shear/ \
+#       --yaml tune.yaml \
 #       --n-trials 50 --timeout 4200
 #
 #- The searched hyperparameters come from the YAML train_args block. Each leaf is
@@ -26,8 +28,12 @@
 #  The first value is the default: the training driver uses it and this search
 #  warm-starts trial 0 from it -- one YAML serves both drivers.
 #
-#- `--yaml` (required): config with `data` and `train_args` blocks (training
-#  driver schema; train_args may now carry ranges).
+#- `--root` (required): project folder under $ROOTDIR (data resolves under it);
+#  `--fileroot` (required): subfolder holding the YAML (e.g.
+#  emulators/nla_cosmic_shear). Cocoa layout, as in the training driver.
+#- `--yaml` (default test.yaml): config under --fileroot, `data` + `train_args`
+#  blocks (training driver schema; train_args may now carry ranges). The `data`
+#  block lists bare filenames, resolved under --root/chains.
 #- `--n-trials` (default 50) and `--timeout` (seconds, optional) bound the study.
 #- `--rescale` / `--activation` set the analytic-R mode and ResBlock activation,
 #  fixed across the study, not searched (see the training driver).
@@ -55,6 +61,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
   sys.path.insert(0, ROOT)
 
+from emulator.cocoa import add_cocoa_path_args, resolve_cocoa_config
 from emulator.training import suggest_train_args, search_defaults
 from emulator.experiment import EmulatorExperiment
 
@@ -62,13 +69,10 @@ from emulator.experiment import EmulatorExperiment
 def main():
   parser = argparse.ArgumentParser(
     prog="tune_single_emulator_cosmic_shear")
-  parser.add_argument("--yaml",
-                      dest="yaml",
-                      help="config YAML with the data and "
-                           "train_args blocks (train_args may "
-                           "carry [default, min, max, kind] ranges)",
-                      type=str,
-                      required=True)
+  # --root / --fileroot / --yaml: the cocoa project layout (data under
+  # --root, YAML under --fileroot; train_args may carry [default, min,
+  # max, kind] ranges).
+  add_cocoa_path_args(parser)
   parser.add_argument("--rescale",
                       dest="rescale",
                       help="analytic-R rescaling mode, fixed across "
@@ -104,15 +108,20 @@ def main():
                       action="store_true")
   args, unknown = parser.parse_known_args()
 
+  # Resolve the cocoa layout (data under $ROOTDIR/<root>, YAML under
+  # <fileroot>); loads the YAML and makes its data paths absolute. This
+  # study only prints to stdout, so the output fileroot is discarded.
+  cfg, _ = resolve_cocoa_config(args)
+
   # Setup -- config parse, model resolution, device, data staging, geometry,
   # chi2, per-run spec assembly -- lives in EmulatorExperiment, shared with the
   # training driver. Geometry / chi2 / activation are fixed, so build them once
   # here; only the searched train_args vary per trial. Single-emulator choices are
   # EmulatorExperiment defaults; model is the YAML's (train_args.model.name).
-  exp = EmulatorExperiment.from_yaml(args.yaml,
-                                     rescale=args.rescale,
-                                     activation=args.activation,
-                                     quiet=args.quiet)
+  exp = EmulatorExperiment.from_config(cfg,
+                                       rescale=args.rescale,
+                                       activation=args.activation,
+                                       quiet=args.quiet)
   # the experiment's quiet-gated logger
   log = exp.log
   log(f"device: {exp.device}  |  rescale: {exp.rescale}  "
