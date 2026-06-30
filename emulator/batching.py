@@ -189,14 +189,36 @@ def _build_loaders_one(device, C, dv, idx,
     used    = GPU bytes this source made resident.
   """
   ncosmo    = C.shape[1]
+  # out_dim = the model's output width = the number of unmasked
+  # data-vector entries the network predicts (dest_idx holds the
+  # kept positions; .numel() counts them).
   out_dim   = chi2fn.dest_idx.numel()
-  # a loss may stage a WIDER target than the model output:
-  # PCERatioChi2 packs the PCE base alongside the truth so the
-  # chi2 never recomputes the base in the training loop. It
-  # declares that width via target_dim; every other loss has no
-  # such attribute, so getattr falls back to out_dim and nothing
-  # changes for them.
+
+  # tgt_dim = the width of the target tensor this loader stages
+  # per row. Normally that is just the encoded truth, one value
+  # per kept entry, so tgt_dim == out_dim. One loss needs more
+  # room: PCERatioChi2 forms its physical prediction as
+  #   pred = base * (1 + net_output)
+  # where net_output is the model's output (a fractional
+  # correction) and base is a fixed reference data vector (the
+  # frozen PCE). Rather than recompute base every batch, it
+  # precomputes it once here and stages [base ; truth] as a
+  # single 2*n_keep-wide target, then unpacks both inside the
+  # chi2.
+  #
+  # A loss requests that wider target by defining a `target_dim`
+  # attribute. getattr(obj, "name", default) returns obj.name if
+  # it exists and `default` otherwise (it never raises), so a
+  # loss without target_dim falls back to out_dim and stages the
+  # plain truth. This is the same opt-in pattern as the
+  # needs_params flag a few lines below.
   tgt_dim   = getattr(chi2fn, "target_dim", out_dim)
+
+  # used_rows = the distinct rows this source loads. np.unique
+  # both removes duplicates (idx may name a row more than once)
+  # and returns them sorted, so each row is staged once and in
+  # file order: the order slots() assumes, and the one that makes
+  # a memmap read sequential rather than random. n_used counts them.
   used_rows = np.unique(idx)
   n_used    = len(used_rows)
 
