@@ -123,7 +123,11 @@ students will read the documentation". Six rules:
     ~20%, a uniform tightening pass bottoms out at ~3-8% on the lean modules
     (formal Arguments blocks, one fact per sentence, no filler) and only ~15-20%
     on comment-heavy driver HEADERS; you CANNOT shed 20% by tightening without
-    deleting teaching points. The levers, in order: kill ALL-CAPS emphasis (->
+    deleting teaching points. MEASURED 2026-07-01: a whole-package pass via 8
+    parallel subagents (one tight spec each) landed ~9.5% OVERALL -- 6-8% on the
+    dense math / geometry / training modules, 11-14% on batching / data-staging,
+    ~15% on the driver headers, ~21% on the tiny scheduling helper. The levers, in
+    order: kill ALL-CAPS emphasis (->
     phrasing), cut filler ("note that"/"in other words"/"the reason is that"/"so
     that"), and -- the biggest -- collapse CROSS-DOCSTRING restatements (a
     docstring that re-derives what a sibling docstring already states -> point to
