@@ -1,4 +1,22 @@
-"""Memory sizing and the regime-aware data loaders."""
+"""Memory sizing and the regime-aware data loaders.
+
+This module decides where each source's data lives and hands the training
+loop two closures (rows -> whitened param inputs, rows -> encoded targets)
+that hide it. The helpers compute_batch_size_bytes,
+compute_model_size_bytes, and batches_per_load estimate the per-batch and
+resident memory. _build_loaders_one picks one of three regimes against a
+VRAM budget (pre-encode the whole target set on the GPU, stream it from
+RAM, or stream it from a disk memmap) and reports the bytes it made
+resident. build_loaders runs it once per source (train, then val against
+the reduced budget) and returns the data dict the loop consumes.
+
+PS: whitened = rotated into the covariance eigenbasis and scaled to unit
+variance, so the components are decorrelated (the form the network sees).
+encoded = a data vector put through the geometry's encode (keep the
+unmasked entries, subtract the training mean, whiten), the form trained
+against. resident = held in GPU memory for the whole run, not re-loaded
+each batch.
+"""
 
 import numpy as np
 import torch

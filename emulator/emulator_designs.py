@@ -1,4 +1,19 @@
-"""Standard emulator models (ResMLP, ResCNN)."""
+"""Standard emulator models (ResMLP, ResCNN).
+
+These are the full networks that map whitened parameters to the whitened
+data vector. ResMLP is the baseline: an input projection, a stack of
+identical ResBlocks, an output projection, and a final Affine. ResCNN
+adds a 1D-CNN correction appendix on top of a ResMLP trunk: the trunk
+predicts in the full (cov-eigenbasis) whitening, fixed buffers map its
+output into theta order so a conv can correct structure along the angular
+axis, and a learnable gate adds the correction back. So swapping
+ResMLP -> ResCNN changes only the model, not the whitening. The per-bin
+parallel variants live in parallel/.
+
+PS: whitened = rotated into the covariance eigenbasis and scaled to unit
+variance, so the components are decorrelated and equally hard to fit; the
+geometry classes (geometries_parameter / geometries_output) do it.
+"""
 
 import torch
 import torch.nn as nn

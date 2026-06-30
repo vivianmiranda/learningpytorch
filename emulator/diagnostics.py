@@ -1,4 +1,15 @@
-"""Model diagnostics over a validation set (coverage, ...)."""
+"""Model diagnostics over a validation set.
+
+This module provides three post-training analyses that say why the metric
+sits where it does (each returns a dict the plotting reads).
+coverage_diagnostic asks whether the failing val points sit in sparse
+regions of the training set (a kNN-distance vs delta-chi2 correlation,
+i.e. data coverage). local_linear_floor compares the model to a
+local-linear interpolation of the training targets (the data-only floor;
+plain chi2 only). hard_direction_regression fits log10 delta-chi2 against
+the (log) parameters to find which combination predicts the per-point
+hardness.
+"""
 
 import numpy as np
 import torch

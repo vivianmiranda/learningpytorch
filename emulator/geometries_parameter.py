@@ -1,4 +1,19 @@
-"""Input (parameter) whitening geometries."""
+"""Input (parameter) whitening geometries.
+
+This module is the input side of the network: it maps raw cosmological
+parameters to the decorrelated, unit-variance vector the model consumes
+(encode) and back (decode). ParamGeometry is the base: it centers,
+rotates into the covmat eigenbasis, and unit-scales. LogParamGeometry
+whitens in log space for the multiplicative parameters, while
+NLAInputGeometry and AmplitudeFactorGeometry whiten every parameter
+except the intrinsic-alignment amplitude(s), which they append raw so the
+loss can apply them in closed form (the factored-IA emulator).
+
+PS: to whiten is to rotate into the covariance eigenbasis and scale each
+direction to unit variance, so correlated quantities become decorrelated
+and equally scaled. encode = center the raw input, then whiten it; decode
+is its exact inverse.
+"""
 
 import numpy as np
 import torch
@@ -193,9 +208,12 @@ class LogParamGeometry(ParamGeometry):
     X = np.asarray(samples, dtype="float64")
     assert (X[:, log_mask] > 0).all(), \
       "logged params must be strictly positive"
+
+    # transform the logged columns, then center in that mixed space.
     Xt = X.copy()
     Xt[:, log_mask] = np.log(Xt[:, log_mask])
     center = Xt.mean(0)
+
     lam, V = np.linalg.eigh(np.cov(Xt, rowvar=False))
     return cls(device=device,
                names=names,
@@ -287,6 +305,7 @@ class NLAInputGeometry:
       names = f.readline().lstrip("#").split()
     cov    = np.loadtxt(covmat_path)
     idx_a1 = names.index(a1_name)
+
     # keep = the 11 non-A1_1 columns, in their original order.
     keep   = [j for j in range(len(names)) if j != idx_a1]
     # 11x11 sub-covariance and the 11 sub-means (A1_1 removed).
@@ -294,10 +313,12 @@ class NLAInputGeometry:
     cen    = (center.detach().cpu().numpy()
               if torch.is_tensor(center)
               else np.asarray(center))[keep]
+
     # eigendecompose the sub-cov -> the inner whitening basis.
     lam, V = np.linalg.eigh(cov11)
     pg11 = ParamGeometry(device, [names[j] for j in keep],
                          cen, V, np.sqrt(lam))
+
     return cls(device=device, pg11=pg11, idx_a1=idx_a1, n_param=len(names))
 
   def encode(self, theta):
@@ -410,14 +431,17 @@ class AmplitudeFactorGeometry:
     cov     = np.loadtxt(covmat_path)
     amp_idx = [names.index(a) for a in amp_names]
     amp_set = set(amp_idx)
+
     keep    = [j for j in range(len(names)) if j not in amp_set]
     cov_k   = cov[np.ix_(keep, keep)]
     cen     = (center.detach().cpu().numpy()
                if torch.is_tensor(center)
                else np.asarray(center))[keep]
+
     lam, V  = np.linalg.eigh(cov_k)
     pg_keep = ParamGeometry(device, [names[j] for j in keep],
                             cen, V, np.sqrt(lam))
+
     return cls(device=device, pg_keep=pg_keep, amp_idx=amp_idx, n_param=len(names))
 
   def encode(self, theta):

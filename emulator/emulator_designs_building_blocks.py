@@ -1,4 +1,14 @@
-"""Shared nn building blocks (Affine, ResBlock, CNNBlock)."""
+"""Shared nn building blocks (Affine, ResBlock, CNNBlock).
+
+These are the small nn.Modules the emulator models are assembled from.
+Affine is a learnable per-output scale and shift (the default ResBlock
+"norm" and the models' final layer). ResBlock is a width-preserving
+residual block (n dense layers, each with a norm and an activation
+factory, and a skip added before the last). CNNBlock is a 1D-convolution
+correction head that treats the data vector as a signal and slides a
+learned kernel along it (the axis-aware piece of ResCNN). The grouped /
+per-bin twins live in parallel/.
+"""
 
 import torch
 import torch.nn as nn

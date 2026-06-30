@@ -18,7 +18,7 @@
 #- It REUSES the training driver's YAML (and its model / rescale / activation
 #  choices). To compare architectures or chi2 modes, run it once per config --
 #  change train_args.model.name (or --rescale / --activation) and a different
-#  --out -- then overlay the saved <out>.json curves.
+#  --out -- then overlay the saved <out>.txt curves.
 #
 #- For each N_train in a geometric grid [--n-min .. --n-max] (--n-max defaults
 #  to the full physically-cut training pool), it stages a NESTED training subset
@@ -32,9 +32,9 @@
 #- `--n-min` (default 2000), `--n-max` (default = pool), `--n-points` (default
 #  5): the geometric N_train grid (clamped to the pool, deduplicated).
 #- `--threshold` (default 0.2): the delta-chi2 cutoff the fraction counts.
-#- `--out` (default ntrain_sweep): writes <out>.json (the curve + the config it
-#  came from) and <out>.pdf (a single-curve figure).
-#- `--quiet`: suppress stdout (the figure and json are still written).
+#- `--out` (default ntrain_sweep): writes <out>.txt (the curve + the config it
+#  came from, np.loadtxt-loadable) and <out>.pdf (a single-curve figure).
+#- `--quiet`: suppress stdout (the .txt and .pdf are still written).
 #
 #- This trains ONE full model per grid point, so a sweep is --n-points
 #  trainings long -- run it on the workstation, where cosmolike lives.
@@ -44,7 +44,6 @@
 import argparse
 import os
 import sys
-import json
 import time
 
 import numpy as np
@@ -57,6 +56,7 @@ if ROOT not in sys.path:
   sys.path.insert(0, ROOT)
 
 from emulator.experiment import EmulatorExperiment
+from emulator.results import save_learning_curves
 
 
 def main():
@@ -109,13 +109,13 @@ def main():
                       default=0.2)
   parser.add_argument("--out",
                       dest="out",
-                      help="output base path -> <out>.json + <out>.pdf "
+                      help="output base path -> <out>.txt + <out>.pdf "
                            "(default ntrain_sweep)",
                       type=str,
                       default="ntrain_sweep")
   parser.add_argument("--quiet",
                       dest="quiet",
-                      help="suppress all stdout (json / pdf still written)",
+                      help="suppress all stdout (txt / pdf still written)",
                       action="store_true")
   args, unknown = parser.parse_known_args()
 
@@ -163,25 +163,21 @@ def main():
     log(f"  N_train {int(N):8d}  f(>{args.threshold:g}) {f:.4f}  "
         f"({time.time() - t0:.0f}s)")
 
-  # save the curve + the config it came from, so several runs (one per
-  # architecture / chi2 mode) can be overlaid later.
-  result = {
-    "yaml":       args.yaml,
-    "model":      model_name,
-    "rescale":    exp.rescale,
-    "activation": exp.activation,
-    "threshold":  args.threshold,
-    "pool":       pool,
-    "sizes":      [int(n) for n in sizes],
-    "fracs":      [float(x) for x in fracs],
-  }
-  out_json = args.out + ".json"
-  out_pdf  = args.out + ".pdf"
-  with open(out_json, "w") as f:
-    json.dump(result, f, indent=2)
-  log(f"saved curve data -> {out_json}")
+  # save the curve + the config it came from as a plain-text table, so
+  # several runs (one per architecture / chi2 mode) can be overlaid
+  # later (np.loadtxt-loadable; the # header lines are skipped).
+  out_txt = args.out + ".txt"
+  out_pdf = args.out + ".pdf"
+  save_learning_curves(
+    path=out_txt,
+    sizes=sizes,
+    curves={"frac": fracs},
+    meta={"model": model_name, "rescale": exp.rescale,
+          "activation": exp.activation, "threshold": args.threshold,
+          "pool": pool})
+  log(f"saved curve data -> {out_txt}")
 
-  # one-curve figure (overlay several <out>.json yourself to compare).
+  # one-curve figure (overlay several <out>.txt yourself to compare).
   from emulator.plotting import plot_learning_curves
   plot_learning_curves(
     curves={f"{model_name} ({exp.rescale})": (sizes, fracs)},

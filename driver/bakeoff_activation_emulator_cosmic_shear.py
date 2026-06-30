@@ -36,9 +36,9 @@
 #- `--n-min` (default 2000), `--n-max` (default = pool), `--n-points` (default
 #  5): the geometric N_train grid (clamped to the pool, deduplicated).
 #- `--threshold` (default 0.2): the delta-chi2 cutoff the fraction counts.
-#- `--out` (default bakeoff_act): writes <out>.json (every curve + the config)
-#  and <out>.pdf (the overlaid figure).
-#- `--quiet`: suppress stdout (the figure and json are still written).
+#- `--out` (default bakeoff_act): writes <out>.txt (every curve + the config,
+#  np.loadtxt-loadable, one column per activation) and <out>.pdf (the figure).
+#- `--quiet`: suppress stdout (the .txt and .pdf are still written).
 #
 #- This trains one full model per (N_train, activation), so the run is
 #  len(grid) x len(activations) trainings long -- run it on the workstation.
@@ -48,7 +48,6 @@
 import argparse
 import os
 import sys
-import json
 import time
 
 import numpy as np
@@ -61,6 +60,7 @@ if ROOT not in sys.path:
   sys.path.insert(0, ROOT)
 
 from emulator.experiment import EmulatorExperiment
+from emulator.results import save_learning_curves
 
 
 # the activations this driver knows how to build (make_activation names).
@@ -115,13 +115,13 @@ def main():
                       default=0.2)
   parser.add_argument("--out",
                       dest="out",
-                      help="output base path -> <out>.json + <out>.pdf "
+                      help="output base path -> <out>.txt + <out>.pdf "
                            "(default bakeoff_act)",
                       type=str,
                       default="bakeoff_act")
   parser.add_argument("--quiet",
                       dest="quiet",
-                      help="suppress all stdout (json / pdf still written)",
+                      help="suppress all stdout (txt / pdf still written)",
                       action="store_true")
   args, unknown = parser.parse_known_args()
 
@@ -183,25 +183,19 @@ def main():
       log(f"  N_train {int(N):8d}  {act:12s}  "
           f"f(>{args.threshold:g}) {f:.4f}  ({time.time() - t0:.0f}s)")
 
-  # save every curve + the config it came from. curves are stored as
-  # lists aligned with `sizes` (JSON keys are strings, so a list per
-  # activation is cleaner to read back than a {N: frac} object).
-  result = {
-    "yaml":        args.yaml,
-    "model":       model_name,
-    "rescale":     exp.rescale,
-    "threshold":   args.threshold,
-    "pool":        pool,
-    "activations": activations,
-    "sizes":       [int(n) for n in sizes],
-    "curves":      {act: [float(curves[act][int(n)]) for n in sizes]
-                    for act in activations},
-  }
-  out_json = args.out + ".json"
-  out_pdf  = args.out + ".pdf"
-  with open(out_json, "w") as f:
-    json.dump(result, f, indent=2)
-  log(f"saved curve data -> {out_json}")
+  # save every curve + the config as a plain-text table, one column per
+  # activation (np.loadtxt-loadable; the # header lines are skipped).
+  out_txt = args.out + ".txt"
+  out_pdf = args.out + ".pdf"
+  save_learning_curves(
+    path=out_txt,
+    sizes=sizes,
+    curves={act: [curves[act][int(n)] for n in sizes]
+            for act in activations},
+    meta={"model": model_name, "rescale": exp.rescale,
+          "activation": "swept", "threshold": args.threshold,
+          "pool": pool})
+  log(f"saved curve data -> {out_txt}")
 
   # overlaid figure: one curve per activation.
   from emulator.plotting import plot_learning_curves

@@ -1,4 +1,14 @@
-"""Analytic cosmic-shear rescaling R (the As/shape preprocessor)."""
+"""Analytic cosmic-shear rescaling R (the As / shape preprocessor).
+
+This module computes a fast, closed-form reference xi (Eisenstein-Hu
+zero-baryon transfer, linear, single-plane Limber) used to divide out the
+broadband cosmology dependence so the network emulates a flatter target.
+_analytic_R is the one place the formula lives (numpy or torch, picked by
+the input type). analytic_shape_ratio wraps it over the masked data vector
+(the emulator path), and rescale_xi wraps it over the (theta, xip, xim)
+matrix layout (for plotting and visual checks). The RescaledChi2 and
+ResidualBaseChi2 losses call _analytic_R on-device.
+"""
 
 import numpy as np
 import torch

@@ -1,16 +1,16 @@
 """One configured single-network cosmic-shear emulator run.
 
-Factors the driver SETUP boilerplate -- parse the config, pick the
-device, stage the train / val sources, build the parameter and
-data-vector geometries and the chi2, assemble the run_emulator spec
-dicts, and train -- into one reusable object, so a driver or a sweep
-script (over N_train, or one hyperparameter at a time) does not copy it.
+This class factors the driver setup boilerplate (parse the config, pick
+the device, stage the train / val sources, build the parameter and
+data-vector geometries and the chi2, assemble the run_emulator spec dicts,
+and train) into one reusable object, so a driver or a sweep script (over
+N_train, or one hyperparameter at a time) does not copy it.
 
-Build it from a YAML file (from_yaml) or an already-parsed config
-mapping (from_config -- e.g. load the YAML once and rebuild from a
-tweaked copy per sweep point). Both resolve the model class from
-train_args.model.name through the MODELS registry. The expensive pieces
-are built by explicit methods and cached on the instance, so:
+Build it from a YAML file (from_yaml) or an already-parsed config mapping
+(from_config, e.g. load the YAML once and rebuild from a tweaked copy per
+sweep point). Both resolve the model class from train_args.model.name
+through the MODELS registry. The expensive pieces are built by explicit
+methods and cached on the instance, so:
 
   - a SINGLE run (the driver): exp = from_yaml(...); exp.run().
   - an N_TRAIN sweep (geometry depends on the training subset):
@@ -84,12 +84,50 @@ class EmulatorExperiment:
     Store the config + fixed choices; build the cheap derived state.
 
     Arguments:
-      data       = the config "data" block (file paths, the cut / split
-                   settings, the cosmolike dataset).
-      train_args = the resolved "train_args" block (range-free, e.g.
-                   from default_train_args); the per-run knobs and the
-                   model / optimizer / lr / scheduler / trim / focus
-                   sub-blocks.
+      data       = the config "data" block: the input file paths plus the
+                   cut / split / cosmolike-dataset settings. Keys:
+                     train_dv = training data-vector .npy (memmapped);
+                     train_params = training parameter .txt (columns:
+                       weight, lnp, the modeled params, chi2);
+                     train_covmat = parameter covmat (header line = the
+                       parameter names);
+                     val_dv = validation data-vector .npy;
+                     val_params = validation parameter .txt;
+                     cosmolike_data_dir = data folder under
+                       external_modules/data;
+                     cosmolike_dataset = .dataset ini naming the cov /
+                       mask / data-vector files;
+                     omegabh2_cut = drop rows with omega_b h^2 >= this;
+                     train_divisor / val_divisor = keep N // divisor of
+                       the train / val rows;
+                     split_seed = seed for the cut+shuffle that picks the
+                       train / val rows;
+                     ram_frac = optional (default 0.7): RAM fraction the
+                       staged subset may fill.
+      train_args = the resolved "train_args" block: range-free (any
+                   [default, min, max, kind] search range already
+                   collapsed to a scalar, e.g. by default_train_args).
+                   Top-level keys:
+                     nepochs = passes over the training set;
+                     bs = minibatch size;
+                     loss_mode = optional (default "sqrt"): the per-sample
+                       transform "sqrt" / "chi2" / "sqrt_dchi2";
+                     silent = optional (default False): per-run silence.
+                   Plus six constructible sub-blocks (each a mapping):
+                     model = the model's kwargs -- "name" (resmlp /
+                       rescnn; from_config reads it to pick the class,
+                       then build_specs strips it) plus int_dim_res,
+                       n_blocks, and for rescnn kernel_size / channels /
+                       n_blocks_cnn / gate_init;
+                     optimizer = weight_decay (+ any extra AdamW kwargs);
+                     lr = lr_base, bs_base, warmup_epochs (the run sets
+                       lr = lr_base * sqrt(bs / bs_base));
+                     scheduler = mode, patience, factor (the
+                       ReduceLROnPlateau kwargs);
+                     trim = the trim schedule -- start, end, hold_epochs,
+                       anneal_epochs, shape (see anneal_value);
+                     focus = the focal-weight schedule -- start, end,
+                       hold_epochs, anneal_epochs, shape, kappa.
       model_cls  = the model class (ResMLP / ResCNN); from_config
                    resolves it from train_args.model.name.
       opt_cls    = optimizer class (default AdamW).
@@ -123,6 +161,8 @@ class EmulatorExperiment:
     self.rescale    = rescale
     self.activation = activation
     self.quiet      = quiet
+    # make_logger / pick_device (training.py): a print(*a) gated on quiet
+    # (a no-op when quiet), and the compute device (cuda > mps > cpu).
     self.log        = make_logger(quiet=quiet)
     self.device     = pick_device() if device is None else device
     # the un-collapsed train_args (search ranges intact), for a search
@@ -133,8 +173,9 @@ class EmulatorExperiment:
     # TF32 tensor-core float32 matmuls (Ampere+); no-op on CPU / MPS.
     # One-time global switch.
     torch.set_float32_matmul_precision("high")
-    # parameter names from the TRAINING covmat header (reused for the
-    # val cut -- same columns). Config-derived and cheap.
+    # read_param_names (data_staging.py): the parameter column names from
+    # the covmat's "#"-prefixed header line. Reused for the val cut (same
+    # columns); config-derived and cheap.
     self.names = read_param_names(data["train_covmat"])
     # artifacts the methods below build; cached for reuse across a sweep
     # (None until built).
@@ -158,7 +199,8 @@ class EmulatorExperiment:
 
     Arguments:
       cfg    = mapping with a "data" block and a "train_args" block (the
-               same schema the drivers load from YAML).
+               schema the drivers load from YAML; see __init__ for the
+               exact keys each block holds).
       models = name -> class registry (default MODELS:
                resmlp -> ResMLP, rescnn -> ResCNN).
       **kwargs = forwarded to __init__ (opt_cls, sched_cls, probe,
@@ -172,8 +214,9 @@ class EmulatorExperiment:
       if block not in cfg:
         raise KeyError(
           f"config is missing the required block: {block!r}")
-    # collapse search ranges to defaults, so a tuning YAML also builds a
-    # concrete run (the first value of each range).
+    # default_train_args (training.py): walk train_args and collapse every
+    # [default, min, max, kind] search range to its default (first) value,
+    # so a tuning YAML also builds a concrete run.
     ta = default_train_args(cfg["train_args"])
     # the model is the config's choice; read (not pop) name -- build_specs
     # strips it from the spread, so it never reaches the constructor.
@@ -224,6 +267,11 @@ class EmulatorExperiment:
     """
     d   = self.data
     gen = torch.Generator().manual_seed(int(d["split_seed"]))
+    # load_source (data_staging.py): memmap the dv .npy, load + physically
+    # cut the params (omega_b h^2 < cut), keep n_keep (or N // divisor)
+    # rows of the seeded shuffle, stage them in RAM if they fit (else keep
+    # the memmap), and return a source dict {C, dv, idx} (+ C_mean /
+    # dv_mean when with_means).
     self.train_set = load_source(
       dv_path=d["train_dv"],
       params_path=d["train_params"],
@@ -255,6 +303,8 @@ class EmulatorExperiment:
     """
     d   = self.data
     gen = torch.Generator().manual_seed(int(d["split_seed"]))
+    # load_source (data_staging.py): same staging as stage_train, on the
+    # val files; with_means=False (val borrows the TRAINING centers).
     self.val_set = load_source(
       dv_path=d["val_dv"],
       params_path=d["val_params"],
@@ -288,6 +338,8 @@ class EmulatorExperiment:
     # trailing chi2), as load_source does by default.
     C   = np.loadtxt(d["train_params"], dtype="float32")[:, slice(2, -1)]
     idx = np.arange(C.shape[0])
+    # phys_cut_idx (data_staging.py): keep the rows with omega_b h^2 =
+    # Omega_b (H0/100)^2 < cut (drops the sparse high-baryon corner).
     phys = phys_cut_idx(C=C, idx=idx, names=self.names,
                         cut=d["omegabh2_cut"])
     return int(len(phys))
@@ -315,18 +367,27 @@ class EmulatorExperiment:
     # which lives only on the workstation -- importing it here keeps this
     # module importable (for the config logic) without cosmolike.
     from .geometries_output import DataVectorGeometry
+    # ParamGeometry.from_covmat (geometries_parameter.py): the INPUT
+    # whitening -- eigendecompose the parameter covmat so encode() centers
+    # + rotates + unit-scales the cosmological params the model sees.
     self.pgeom = ParamGeometry.from_covmat(
       device=self.device,
       center=train_set["C_mean"],
       covmat_path=d["train_covmat"])
+    # DataVectorGeometry.from_cosmolike (geometries_output.py): the OUTPUT
+    # geometry -- read cosmolike's cov / mask / inverse-cov, eigendecompose
+    # the kept (unmasked) block, so encode()/chi2 whiten + score the masked
+    # data vector.
     self.geom = DataVectorGeometry.from_cosmolike(
       device=self.device,
       dv_center=train_set["dv_mean"],
       data_dir=d["cosmolike_data_dir"],
       dataset=d["cosmolike_dataset"],
       probe=self.probe)
-    # cosmo_mid = the training-cloud mean (R = 1 there for a rescaled
-    # chi2; ignored by the plain chi2).
+    # make_chi2 (loss_functions.py): wrap geom in the loss -- plain
+    # CosmolikeChi2, or the analytic-R RescaledChi2 / ResidualBaseChi2 when
+    # rescale != "none". cosmo_mid = the training-cloud mean (R = 1 there
+    # for a rescaled chi2; ignored by the plain chi2).
     self.chi2fn = make_chi2(
       geom=self.geom,
       rescale=self.rescale,
@@ -362,16 +423,25 @@ class EmulatorExperiment:
     # scalar name) -- else it would reach the model constructor.
     ta = dict(train_args)
     ta["model"] = {k: v for k, v in ta["model"].items() if k != "name"}
+    # build_run_specs (training.py): turn the train_args sub-blocks into
+    # the six {cls, **kwargs} spec dicts run_emulator consumes (keyed
+    # model_opts / opt_opts / lr_opts / sched_opts / trim_opts /
+    # focus_opts); the classes are this experiment's fixed choices.
     specs = build_run_specs(
       train_args=ta,
       model_cls=self.model_cls,
       opt_cls=self.opt_cls,
       sched_cls=self.sched_cls)
-    # the activation is a factory callable (cannot live in the YAML):
-    # select by name and inject into the model's ResBlock options
-    # (setdefault keeps any block_opts the config set).
+    # make_activation (activations.py): map the activation NAME to a
+    # factory act(dim) -> nn.Module (the paper's H, or a Power / Gated /
+    # GatedPower variant). It is a callable, so it cannot live in the YAML;
+    # inject it into the model's ResBlock options (setdefault keeps any
+    # block_opts the config set).
     specs["model_opts"].setdefault(
       "block_opts", {})["act"] = make_activation(self.activation)
+    # ResCNN (emulator_designs.py) needs geom to build its fixed
+    # full<->theta basis-change buffers; ResMLP takes none, so inject geom
+    # only for ResCNN.
     if self.model_cls is ResCNN:
       specs["model_opts"]["geom"] = self.geom
     return specs
@@ -403,6 +473,10 @@ class EmulatorExperiment:
     # None -> the config/quiet default; a search driver forces silent.
     silent_run = (train_args.get("silent", False) or self.quiet
                   if silent is None else silent)
+    # run_emulator (training.py): build the model / optimizer / scheduler
+    # from the specs and the regime-aware data loaders, train nepochs with
+    # a per-epoch val pass, and return the model (restored to its best
+    # frac>0.2 epoch) plus the per-epoch histories.
     out = run_emulator(
       train_set=self.train_set,
       val_set=self.val_set,
@@ -461,6 +535,9 @@ class EmulatorExperiment:
       the fraction over `threshold`, a float.
     """
     source = self.val_set if source is None else source
+    # eval_source_chi2 (training.py): score every row of `source` -- encode
+    # its params -> model -> the per-row delta-chi2 against the encoded
+    # truth (returns numpy params + dchi2, aligned row-for-row).
     _, dchi2 = eval_source_chi2(
       model=self.model,
       param_geometry=self.pgeom,

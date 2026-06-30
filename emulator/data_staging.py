@@ -1,4 +1,20 @@
-"""Raw data loading, streaming statistics, and the physical cut."""
+"""Raw data loading, streaming statistics, and the physical cut.
+
+This module is the bottom of the pipeline: it turns the on-disk parameter
+(.txt) and data-vector (.npy) dumps into the in-memory "source" dicts the
+rest of the package consumes, without ever loading the (memmap-sized) dv
+file whole. The functions stream_chunks, stream_stats, and param_stats
+compute per-column normalization stats over selected rows; stage_source
+materializes a row subset in RAM if it fits (else keeps the memmap);
+phys_cut_idx keeps the rows with omega_b h^2 < cut; and read_param_names
+reads the parameter names off a covmat header. load_source is the
+orchestrator: it memmaps, cuts, sizes, and stages one source into a
+{C, dv, idx, (+ means)} dict.
+
+PS: a memmap (memory-mapped array) is a NumPy array backed by the file on
+disk and read in slices, so an array larger than RAM is never loaded
+whole.
+"""
 
 import os
 

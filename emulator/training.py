@@ -1,4 +1,16 @@
-"""Device selection, factories, evaluation, the training loop, run_emulator."""
+"""Device selection, construction factories, evaluation, and training.
+
+This module is the run layer that ties the package together. pick_device
+and make_logger are setup helpers. make_model, make_optimizer, and
+make_scheduler each build one component from a {cls, **kwargs} spec dict,
+and build_run_specs assembles the six spec dicts from a config (with the
+default / suggest / search resolvers for the [default, min, max, kind]
+hyperparameter ranges). eval_val and eval_source_chi2 score the model,
+training_loop_batched is the per-epoch loop (trim / focus annealing and
+best-epoch tracking), and run_emulator is the top-level orchestrator that
+builds everything, then trains, returning the model and the per-epoch
+histories.
+"""
 
 import numpy as np
 import torch

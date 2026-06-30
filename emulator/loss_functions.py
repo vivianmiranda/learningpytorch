@@ -1,4 +1,19 @@
-"""Chi2 losses and the robustness annealing schedule."""
+"""Chi2 losses and the robustness annealing schedule.
+
+This module is the loss layer: each class holds a DataVectorGeometry
+(composition, not inheritance) and adds the chi2 (the masked Mahalanobis
+distance r^T Cinv r per sample) and the training loss built on it.
+CosmolikeChi2 is the plain loss (trimming, a focal hardness weight, and a
+sqrt / pseudo-Huber transform). RescaledChi2 and ResidualBaseChi2 are the
+two analytic-R variants (R divides the net output, versus R moves only
+the baseline). ElementWeightedChi2 up-weights the worst-fit dv elements.
+anneal_value is the per-epoch trim / focus schedule, and make_chi2 builds
+the right loss from a geometry and a rescale mode.
+
+PS: the Mahalanobis distance r^T Cinv r is a squared residual r weighted
+by the inverse covariance Cinv (this is the chi2); "masked" means only
+the unmasked data-vector entries the analysis keeps enter the sum.
+"""
 
 import numpy as np
 import torch

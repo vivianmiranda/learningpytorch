@@ -1,4 +1,22 @@
-"""Output (data-vector) geometries and the shear angle map."""
+"""Output (data-vector) geometries and the shear angle map.
+
+This module is the output side: it owns every transform between a raw
+cosmolike data vector and the whitened, masked target the network
+predicts, plus the chi2's covariance. DataVectorGeometry is the base (it
+squeezes to the unmasked entries, centers, whitens in the covariance
+eigenbasis, and inverts each step). DiagonalGeometry whitens by the
+marginal sigma only (theta order kept, for a 1D-CNN head), and
+BlockDiagonalGeometry whitens each tomographic bin by its own sub-block.
+build_shear_angle_map attaches the per-element angle / tomography metadata
+(theta, source redshifts, xi+/- branch, per-bin sizes). This is the only
+module that imports cosmolike.
+
+PS: to whiten is to rotate into the covariance eigenbasis and scale to
+unit variance (decorrelated, equally-hard-to-fit components). To squeeze
+is to keep only the unmasked entries of the full data vector (the masked
+ones are what the analysis drops). encode = squeeze, center, then whiten,
+the form the network predicts.
+"""
 
 import os
 import numpy as np

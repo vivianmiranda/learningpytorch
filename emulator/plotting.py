@@ -1,4 +1,14 @@
-"""Training-history, coverage, and xi-curve plots."""
+"""Training-history, learning-curve, coverage, and xi plots.
+
+This module holds the matplotlib figures (a colorblind-safe palette, no
+red/green). plot_history draws the training history, plot_diagnostics is
+the multipage diagnostics PDF (history, coverage, the local-linear floor,
+and the hard-direction regression), and plot_learning_curves overlays
+f(delta-chi2 > thr) vs N_train curves (the sweep / bake-off output).
+source_param_samples, dv_to_xi, and plot_xi handle the parameter-coverage
+triangle and the xi correlation-function curves. The "_"-prefixed helpers
+draw the individual panels the public functions share.
+"""
 
 import itertools
 import warnings

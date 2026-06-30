@@ -1,19 +1,50 @@
-"""Scalar learnable activation functions (the act factories)."""
+"""Scalar learnable activation functions for the ResBlock `act` slot.
+
+Each class is an nn.Module computing one elementwise activation with
+learnable per-feature shape parameters; a ResBlock takes an `act`
+factory (a callable act(dim) -> module) and builds one per layer.
+activation_fcn is the paper's H(x) = (gamma + (1-gamma) sigmoid(beta x))
+x, a learnable identity<->Swish interpolation; GatedActivation (K gates),
+PowerGatedActivation (a bounded power tail), and GatedPowerActivation
+(both) generalize it. make_activation maps a short name ("H", "power",
+"multigate", "gated_power") to the matching factory, so a driver or YAML
+can pick the activation by string.
+"""
 
 import torch
 import torch.nn as nn
 
 
 class activation_fcn(nn.Module):
+    """
+    The paper's learnable activation H(x): a per-element interpolation
+    between the identity and a Swish-like gate.
+
+      H(x) = (gamma + (1 - gamma) * sigmoid(beta * x)) * x
+
+    Each feature has its own learnable gamma and beta (length-`dim`
+    vectors). The gate gamma + (1 - gamma) sigmoid(beta x) runs from gamma
+    (as x -> -inf) to 1 (as x -> +inf), so H is asymptotically linear at
+    both tails (slope gamma on the left, 1 on the right) -- non-saturating,
+    which is why it beats tanh here. gamma = beta = 0 at init, so H starts
+    as 0.5 * x (sigmoid(0) = 0.5); training then shapes each feature's
+    curve. GatedActivation / PowerGatedActivation / GatedPowerActivation
+    generalize this same gate (more gates, a learnable power tail).
+
+    Arguments:
+      dim = feature width (one independent gamma / beta per feature).
+    """
     def __init__(self, dim):
         super(activation_fcn, self).__init__()
         self.dim   = dim
         self.gamma = nn.Parameter(torch.zeros((dim)))
         self.beta  = nn.Parameter(torch.zeros((dim)))
     def forward(self,x):
-        exp = torch.mul(self.beta,x)
-        inv = torch.special.expit(exp)
-        fac_2 = 1-self.gamma
+        # H(x) = (gamma + (1 - gamma) sigmoid(beta x)) * x, elementwise.
+        exp = torch.mul(self.beta,x)            # beta * x
+        inv = torch.special.expit(exp)          # expit = sigmoid(beta x)
+        fac_2 = 1-self.gamma                     # the (1 - gamma) weight
+        # gate = gamma + (1 - gamma) sigmoid(beta x); times x.
         out = torch.mul(self.gamma + torch.mul(inv,fac_2), x)
         return out
 
