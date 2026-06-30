@@ -137,12 +137,14 @@ def select_lars_loo(Psi, y, max_terms=150, patience=10):
   best_supp = [0]
   best_beta = None
   since     = 0
+
   for _ in range(max_terms):
     A    = Psi[:, active]
     G    = A.T @ A + 1e-10 * np.eye(len(active))
     Ginv = np.linalg.inv(G)
     beta = Ginv @ (A.T @ y)
     resid = y - A @ beta                      # in-sample resid
+
     # hat = leverage h_nn = diag of A (A^T A)^-1 A^T. It is how
     # much point n pulls its own fit; near 1 = high influence.
     hat = np.einsum("ni,ij,nj->n", A, Ginv, A)
@@ -170,11 +172,13 @@ def select_lars_loo(Psi, y, max_terms=150, patience=10):
       since += 1
     if since >= patience or len(active) >= max_terms:
       break
+
     # next term: candidate column most correlated with the
     # residual (scaled by its norm); never re-pick an active one.
     score = np.abs(Psi.T @ resid) / cn
     score[active] = -1.0
     active.append(int(np.argmax(score)))
+
   return np.array(best_supp, dtype=int), best_beta, best_loo
 
 

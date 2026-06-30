@@ -117,18 +117,21 @@ class CNNBlock(nn.Module):
     assert kernel_size % 2 == 1, (
       "kernel_size must be odd so same-padding keeps the length")
     pad = (kernel_size - 1) // 2
+
     # 1 input channel (the signal) -> `channels` filters; length
     # preserved by the same-padding.
     self.conv = nn.Conv1d(in_channels=1,
                           out_channels=channels,
                           kernel_size=kernel_size,
                           padding=pad)
+
     # nonlinearity between the expand and the collapse. Without
     # it, conv (1->channels) and collapse (channels->1) are two
     # stacked linear convs that fold into a single 1->1 kernel,
     # so the extra filters would be wasted. Identity when
     # channels == 1 (no expand to make nonlinear).
     self.act_mid = act(dim) if channels > 1 else nn.Identity()
+
     # mix the filters back to one channel (a 1x1 conv is a
     # per-position weighted sum over channels); Identity when
     # channels == 1 so the forward stays uniform.

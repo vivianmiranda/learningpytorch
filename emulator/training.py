@@ -409,6 +409,7 @@ def eval_val(model, lossfn, data, load, bs, thresholds):
   load_dv = data["load_dv"]
   vidx = data["idx"]
   chi2s = []
+
   with torch.no_grad():
     for cs in range(0, len(vidx), load):
       rows = np.sort(vidx[cs:cs+load])
@@ -435,17 +436,20 @@ def eval_val(model, lossfn, data, load, bs, thresholds):
         # We stash several outputs in `preds` before cat,
         # so copy each out of the shared buffer now.
         preds.append(model(xb)[:n].clone())
+
       pred = torch.cat(preds, dim=0)     # (m, out_dim)
       if getattr(lossfn, "needs_params", False):
         chi2s.append(lossfn.chi2(pred=pred, 
                                  target=dvc, 
                                  params_whitened=Cc))
       else:
-        chi2s.append(lossfn.chi2(pred=pred, 
+        chi2s.append(lossfn.chi2(pred=pred,
                                  target=dvc))
+
   c = torch.cat(chi2s).cpu() # per-sample chi2
   mean   = c.mean().item()
   median = c.median().item()
+
   # c is (Nval,), thresholds (T,). c[:, None] inserts a size-1
   # axis -> (Nval, 1); thresholds[None, :] -> (1, T). Comparing
   # them broadcasts into a (Nval, T) boolean grid: entry [i, j]

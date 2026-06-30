@@ -189,6 +189,7 @@ class DataVectorGeometry:
     mask_file   = ini.relativeFileName("mask_file")
     lens_file   = ini.relativeFileName("nz_lens_file")
     source_file = ini.relativeFileName("nz_source_file")
+
     lens_ntomo   = ini.int("lens_ntomo")
     source_ntomo = ini.int("source_ntomo")
     ntheta = ini.int("n_theta")

@@ -105,6 +105,7 @@ def _coverage_panels(ax_scatter, ax_hist, knn_dist, dchi2, k_nn):
   """
   y   = np.log10(np.maximum(dchi2, 1e-4))
   bad = dchi2 > 0.2
+
   # (a) hardness vs local sparsity. x = knn_dist, y = log10 dchi2,
   # color = the same y; the dashed line is the 0.2 goal.
   sc = ax_scatter.scatter(knn_dist, y, s=5, c=y, cmap="viridis")
@@ -115,6 +116,7 @@ def _coverage_panels(ax_scatter, ax_hist, knn_dist, dchi2, k_nn):
   ax_scatter.figure.colorbar(sc,
                              ax=ax_scatter,
                              label=r"$\log_{10}\,\Delta\chi^2$")
+
   # (b) good vs bad sparsity. x = knn_dist, y = density; shared
   # bins so the two histograms are directly comparable.
   bins = np.linspace(knn_dist.min(), knn_dist.max(), 40)
@@ -198,6 +200,7 @@ def plot_learning_curves(curves,
   # marker cycle so overlaid curves stay distinguishable in print.
   markers = ["o", "D", "^", "s", "v", "P"]
   fig, ax = plt.subplots(figsize=(6.8, 5.6))
+
   for k, (label, curve) in enumerate(curves.items()):
     # accept either {N: frac} or a (sizes, fracs) pair.
     if isinstance(curve, dict):
@@ -217,6 +220,7 @@ def plot_learning_curves(curves,
             lw=2.5,
             ms=8,
             label=label)
+
   ax.set_xscale("log")
   ax.set_yscale("log")
   ax.set_xlabel(r"$N_{\rm train}$")
@@ -371,18 +375,21 @@ def plot_diagnostics(train_losses,
                    coverage["dchi2"], coverage["k_nn"])
   f1.tight_layout()
   figs.append(f1)
+
   # page 2: the local-linear data floor (plain chi2fn only).
   if floor is not None:
     f2, a2 = plt.subplots(figsize=(6, 6))
     _floor_panel(a2, floor)
     f2.tight_layout()
     figs.append(f2)
+
   # page 3: the hard-direction regression.
   if hard_dir is not None:
     f3, a3 = plt.subplots(1, 2, figsize=(13, 6))
     _hard_direction_panels(a3[0], a3[1], hard_dir)
     f3.tight_layout()
     figs.append(f3)
+
   _save_pages(figs, savepath)
 
 

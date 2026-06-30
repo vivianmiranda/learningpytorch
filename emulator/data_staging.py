@@ -72,6 +72,7 @@ def stream_stats(mm, idx, method=1, CHUNK=10000):
   """
   n = len(idx)               # total rows summarized
   ncols = mm.shape[1]        # one stat per column
+
   if method == 1:
     # one-pass mean/variance via running sums. float64
     # accumulators so summing many rows does not lose
@@ -83,6 +84,7 @@ def stream_stats(mm, idx, method=1, CHUNK=10000):
       x = np.asarray(mm[rows], dtype="float64")
       s1 += x.sum(axis=0)            # accumulate sum
       s2 += (x * x).sum(axis=0)      # accumulate sum of sq
+
     mean = s1 / n
     # variance = (sum_sq - sum^2/n) / (n-1): the one-pass
     # computational form of the unbiased sample variance;
@@ -99,6 +101,7 @@ def stream_stats(mm, idx, method=1, CHUNK=10000):
       mn = np.minimum(mn, x.min(axis=0))   # tighten the min
       mx = np.maximum(mx, x.max(axis=0))   # tighten the max
     offset, scale = mn, mx - mn
+
   # hand back float32 torch tensors (the model's dtype).
   off = torch.from_numpy(offset.astype("float32"))
   scl = torch.from_numpy(scale.astype("float32"))

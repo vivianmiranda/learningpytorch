@@ -52,12 +52,14 @@ def anneal_value(epoch, opts):
   # constant schedule: hold `start` every epoch (baseline).
   if shape == "const":
     return float(start)
+
   end  = opts["end"]
   hold = opts["hold_epochs"]
   span = max(1, opts["anneal_epochs"])
   # before the ramp begins: hold the start value.
   if epoch <= hold:
     return float(start)
+
   # fraction along the ramp, clamped to [0, 1].
   t = min(1.0, (epoch - hold) / span)
   if shape == "cosine":
@@ -65,6 +67,7 @@ def anneal_value(epoch, opts):
     # smoothly (no abrupt change at either end).
     ease = 0.5 * (1.0 + np.cos(np.pi * t))
     return float(end + (start - end) * ease)
+
   # linear value (also the base for the stepped grid).
   val = start + (end - start) * t
   if shape == "step":
@@ -370,9 +373,11 @@ class RescaledChi2(CosmolikeChi2):
       raise RuntimeError(
         "RescaledChi2.chi2 needs the whitened params: pass "
         "them, or call via loss() which stashes them")
+
     geo = self.geom
     R = self._R(params_whitened)
     r = geo.unwhiten(pred - target) / R
+
     if full:
       r = geo.unsqueeze(r)
       # operands in subscript order: r (b,i) = residual / R,

@@ -161,22 +161,27 @@ class EmulatorExperiment:
     self.rescale    = rescale
     self.activation = activation
     self.quiet      = quiet
+
     # make_logger / pick_device (training.py): a print(*a) gated on quiet
     # (a no-op when quiet), and the compute device (cuda > mps > cpu).
     self.log        = make_logger(quiet=quiet)
     self.device     = pick_device() if device is None else device
+
     # the un-collapsed train_args (search ranges intact), for a search
     # driver that resolves them per trial (suggest_train_args); defaults
     # to the resolved train_args when no raw block is supplied.
     self.raw_train_args = (train_args if raw_train_args is None
                            else raw_train_args)
+
     # TF32 tensor-core float32 matmuls (Ampere+); no-op on CPU / MPS.
     # One-time global switch.
     torch.set_float32_matmul_precision("high")
+
     # read_param_names (data_staging.py): the parameter column names from
     # the covmat's "#"-prefixed header line. Reused for the val cut (same
     # columns); config-derived and cheap.
     self.names = read_param_names(data["train_covmat"])
+
     # artifacts the methods below build; cached for reuse across a sweep
     # (None until built).
     self.train_set = None
@@ -367,6 +372,7 @@ class EmulatorExperiment:
     # which lives only on the workstation -- importing it here keeps this
     # module importable (for the config logic) without cosmolike.
     from .geometries_output import DataVectorGeometry
+
     # ParamGeometry.from_covmat (geometries_parameter.py): the INPUT
     # whitening -- eigendecompose the parameter covmat so encode() centers
     # + rotates + unit-scales the cosmological params the model sees.
@@ -374,6 +380,7 @@ class EmulatorExperiment:
       device=self.device,
       center=train_set["C_mean"],
       covmat_path=d["train_covmat"])
+
     # DataVectorGeometry.from_cosmolike (geometries_output.py): the OUTPUT
     # geometry -- read cosmolike's cov / mask / inverse-cov, eigendecompose
     # the kept (unmasked) block, so encode()/chi2 whiten + score the masked
@@ -384,6 +391,7 @@ class EmulatorExperiment:
       data_dir=d["cosmolike_data_dir"],
       dataset=d["cosmolike_dataset"],
       probe=self.probe)
+
     # make_chi2 (loss_functions.py): wrap geom in the loss -- plain
     # CosmolikeChi2, or the analytic-R RescaledChi2 / ResidualBaseChi2 when
     # rescale != "none". cosmo_mid = the training-cloud mean (R = 1 there
@@ -395,6 +403,7 @@ class EmulatorExperiment:
       cosmo_mid=train_set["C"][train_set["idx"]].mean(0),
       data_dir=d["cosmolike_data_dir"],
       dataset=d["cosmolike_dataset"])
+
     return self.pgeom, self.geom, self.chi2fn
 
   # --- per-run pieces ---
@@ -423,6 +432,7 @@ class EmulatorExperiment:
     # scalar name) -- else it would reach the model constructor.
     ta = dict(train_args)
     ta["model"] = {k: v for k, v in ta["model"].items() if k != "name"}
+
     # build_run_specs (training.py): turn the train_args sub-blocks into
     # the six {cls, **kwargs} spec dicts run_emulator consumes (keyed
     # model_opts / opt_opts / lr_opts / sched_opts / trim_opts /
@@ -432,6 +442,7 @@ class EmulatorExperiment:
       model_cls=self.model_cls,
       opt_cls=self.opt_cls,
       sched_cls=self.sched_cls)
+
     # make_activation (activations.py): map the activation NAME to a
     # factory act(dim) -> nn.Module (the paper's H, or a Power / Gated /
     # GatedPower variant). It is a callable, so it cannot live in the YAML;
@@ -439,11 +450,13 @@ class EmulatorExperiment:
     # block_opts the config set).
     specs["model_opts"].setdefault(
       "block_opts", {})["act"] = make_activation(self.activation)
+
     # ResCNN (emulator_designs.py) needs geom to build its fixed
     # full<->theta basis-change buffers; ResMLP takes none, so inject geom
     # only for ResCNN.
     if self.model_cls is ResCNN:
       specs["model_opts"]["geom"] = self.geom
+
     return specs
 
   def train(self, train_args=None, silent=None):
@@ -473,6 +486,7 @@ class EmulatorExperiment:
     # None -> the config/quiet default; a search driver forces silent.
     silent_run = (train_args.get("silent", False) or self.quiet
                   if silent is None else silent)
+
     # run_emulator (training.py): build the model / optimizer / scheduler
     # from the specs and the regime-aware data loaders, train nepochs with
     # a per-epoch val pass, and return the model (restored to its best
@@ -490,6 +504,7 @@ class EmulatorExperiment:
       silent=silent_run,
       device=self.device,
       **specs)
+
     (self.model, self.train_losses, self.medians,
      self.means, self.fracs) = out
     return out

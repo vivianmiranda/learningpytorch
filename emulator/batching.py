@@ -333,6 +333,7 @@ def build_loaders(device, train_set, val_set, param_geometry,
                               budget=budget, 
                               dv_len=dv_len, 
                               CHUNK=CHUNK)
+
   # the train set is now resident on the GPU, so the val
   # call plans against a budget reduced by what train took.
   # (model + Cinv are shared and counted by each call.)
@@ -348,6 +349,7 @@ def build_loaders(device, train_set, val_set, param_geometry,
                            budget=budget - used_tr,
                            dv_len=dv_len, 
                            CHUNK=CHUNK)
+
   return {
     "train": {
       "load_C": load_C,
