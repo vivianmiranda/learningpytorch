@@ -151,45 +151,6 @@ def _bakeoff_worker(gpu_id, my_acts, sizes, cfg, rescale,
     torch.cuda.empty_cache()
 
 
-def _run_serial_bakeoff(exp, sizes, activations, args, log):
-  """
-  Run the bake-off on a single device (no multiprocessing).
-
-  The path for the dev machine (Apple MPS) and a single-GPU box. Reuses the
-  parent's experiment. N is the outer loop, so geometry builds once per N and is
-  shared.
-
-  Arguments:
-    exp         = EmulatorExperiment, built on the compute device.
-    sizes       = N_train grid (ints).
-    activations = activations to bake off.
-    args        = CLI namespace (threshold read).
-    log         = print function (no-op under --quiet).
-
-  Returns:
-    curves = dict activation -> {N_train: frac}.
-  """
-  log(f"device: {exp.device}  |  serial (1 worker)")
-  log("loading validation source:")
-  exp.stage_val()
-
-  curves = {}
-  for act in activations:
-    curves[act] = {}
-  for N in sizes:
-    exp.stage_train(n_train=int(N))
-    exp.build_geometry()
-    for act in activations:
-      t0 = time.time()
-      exp.activation = act
-      exp.train(silent=True)
-      f = exp.frac_above(threshold=args.threshold)
-      curves[act][int(N)] = f
-      log(f"  N_train {int(N):8d}  {act:12s}  "
-          f"f(>{args.threshold:g}) {f:.4f}  ({time.time() - t0:.0f}s)")
-  return curves
-
-
 def _run_parallel_bakeoff(cfg, sizes, activations, n_workers, args, log):
   """
   Run the bake-off across n_workers GPUs, one process each.
@@ -404,11 +365,23 @@ def main():
   # 1 worker (single GPU, or the MPS dev machine) -> serial, reusing the built
   # experiment; else one process per GPU, by activation.
   if n_workers <= 1:
-    curves = _run_serial_bakeoff(exp=exp,
-                                 sizes=sizes,
-                                 activations=activations,
-                                 args=args,
-                                 log=log)
+    log(f"device: {exp.device}  |  serial (1 worker)")
+    log("loading validation source:")
+    exp.stage_val()
+    curves = {}
+    for act in activations:
+      curves[act] = {}
+    for N in sizes:
+      exp.stage_train(n_train=int(N))
+      exp.build_geometry()
+      for act in activations:
+        t0 = time.time()
+        exp.activation = act
+        exp.train(silent=True)
+        f = exp.frac_above(threshold=args.threshold)
+        curves[act][int(N)] = f
+        log(f"  N_train {int(N):8d}  {act:12s}  "
+            f"f(>{args.threshold:g}) {f:.4f}  ({time.time() - t0:.0f}s)")
   else:
     log(f"parallel bake-off across {n_workers} GPUs (split by activation):")
     curves = _run_parallel_bakeoff(cfg=cfg,

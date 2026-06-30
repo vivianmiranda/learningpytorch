@@ -133,39 +133,6 @@ def _sweep_worker(gpu_id, my_sizes, cfg, rescale, activation,
     torch.cuda.empty_cache()
 
 
-def _run_serial(exp, sizes, args, log):
-  """
-  Run the sweep on a single device (no multiprocessing).
-
-  The path for the dev machine (Apple MPS) and a single-GPU box. Reuses the
-  parent's experiment, training each N_train in turn.
-
-  Arguments:
-    exp   = the EmulatorExperiment, already built on the compute device.
-    sizes = the N_train grid (a sequence of ints).
-    args  = the parsed CLI namespace (threshold read).
-    log   = print function (no-op under --quiet).
-
-  Returns:
-    fracs = list of f(delta-chi2 > threshold), aligned with `sizes`.
-  """
-  log(f"device: {exp.device}  |  serial (1 worker)")
-  log("loading validation source:")
-  exp.stage_val()
-
-  fracs = []
-  for N in sizes:
-    t0 = time.time()
-    exp.stage_train(n_train=int(N))
-    exp.build_geometry()
-    exp.train(silent=True)
-    f = exp.frac_above(threshold=args.threshold)
-    fracs.append(f)
-    log(f"  N_train {int(N):8d}  f(>{args.threshold:g}) {f:.4f}  "
-        f"({time.time() - t0:.0f}s)")
-  return fracs
-
-
 def _run_parallel(cfg, sizes, n_workers, args, log):
   """
   Run the sweep across n_workers GPUs, one process each, LPT-balanced.
@@ -384,10 +351,22 @@ def main():
       f"|  activation: {args.activation}")
   log(f"pool {pool}  |  N_train grid: {sizes.tolist()}")
 
-  # 1 worker (single GPU, or the MPS dev machine) -> serial, reusing the
-  # experiment; otherwise one process per GPU, LPT-balanced.
+  # 1 worker (single GPU, or the MPS dev machine) -> serial on this one device,
+  # reusing the experiment; otherwise one process per GPU, LPT-balanced.
   if n_workers <= 1:
-    fracs = _run_serial(exp=exp, sizes=sizes, args=args, log=log)
+    log(f"device: {exp.device}  |  serial (1 worker)")
+    log("loading validation source:")
+    exp.stage_val()
+    fracs = []
+    for N in sizes:
+      t0 = time.time()
+      exp.stage_train(n_train=int(N))
+      exp.build_geometry()
+      exp.train(silent=True)
+      f = exp.frac_above(threshold=args.threshold)
+      fracs.append(f)
+      log(f"  N_train {int(N):8d}  f(>{args.threshold:g}) {f:.4f}  "
+          f"({time.time() - t0:.0f}s)")
   else:
     log(f"parallel sweep across {n_workers} GPUs (LPT-balanced):")
     fracs = _run_parallel(cfg=cfg,
